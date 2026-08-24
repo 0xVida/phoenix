@@ -25,22 +25,46 @@ crates/
 ## Quickstart
 
 ```bash
-cargo build            # workspace build
-cargo test             # unit + integration tests (the Phase 1 kill-and-reassign test lives in swarm-supervisor)
-RUST_LOG=info cargo run -p swarm-api   # once Phase 2 lands
+cargo build                              # workspace build
+cargo test                               # 10 unit + 2 integration tests (kill-and-reassign lives in swarm-supervisor)
+
+# Run the API (dev mode: workers are SIMULATED implementers until Phase 3):
+RUST_LOG=info cargo run -p swarm-api
 ```
 
-## Environment variables
+Then exercise the self-healing flow live:
 
-Never commit API keys. Put them in `.env` (gitignored) — a `.env.example` will ship with Phase 3.
+```bash
+TID=$(curl -s -XPOST localhost:3000/tasks -H 'content-type: application/json' \
+  -d '{"pr_id":"PR-7","title":"Fix off-by-one","bug_description":"sum skips last element"}' \
+  | sed -E 's/.*"task_id":"([^"]+)".*/\1/')
+
+curl -sN localhost:3000/events &                    # watch real backend events (SSE)
+sleep 1 && curl -s -XPOST localhost:3000/tasks/$TID/kill   # THE DEMO MOMENT: kill mid-task
+sleep 6    && curl -s localhost:3000/tasks/$TID            # reassigned + merged (attempt: 2)
+```
+
+## HTTP API
+
+| Endpoint                 | Method | Purpose                                                        |
+|--------------------------|--------|----------------------------------------------------------------|
+| `/tasks`                 | POST   | Submit a PR (`{pr_id,title,bug_description}`) → `{task_id}`     |
+| `/tasks`                 | GET    | List submitted tasks with live status/attempt                   |
+| `/tasks/:id`             | GET    | Deterministic snapshot of the task record                       |
+| `/tasks/:id/kill`        | POST   | Demo fault injection: abort current worker; supervisor recovers |
+| `/events`                | GET    | SSE; `event:` lines use spec names (`task.created`, …)          |
 
 | Variable           | Required | Default                        | Purpose                                   |
 |--------------------|----------|--------------------------------|-------------------------------------------|
-| `LLM_PROVIDER`     | no       | `mock`                         | `mock` \| `anthropic` (extensible)         |
+| `LLM_PROVIDER`     | no       | `mock`                         | `mock` \| `anthropic` (extensible, Phase 3)|
 | `ANTHROPIC_API_KEY`| yes if provider=anthropic | —              | API key for the Anthropic implementation   |
 | `ANTHROPIC_BASE_URL`| no      | `https://api.anthropic.com`    | Override for proxies/local gateways        |
+| `SWARM_BIND`       | no       | `0.0.0.0:3000`                 | API listen address                         |
 | `SWARM_HEARTBEAT_MS`| no      | `500`                          | Worker heartbeat interval                  |
 | `SWARM_LEASE_TIMEOUT_MS`| no  | `1500`                         | Lease expiry (≈3 missed heartbeats)        |
+| `SWARM_REAP_INTERVAL_MS`| no  | `250`                          | Supervisor lease-reaper scan cadence       |
 | `SWARM_MAX_ATTEMPTS`| no      | `3`                            | Reassignments before the task fails        |
+| `SWARM_SIM_WORK_MS`| no       | `3000`                         | Simulated implementer duration (Phase 2)   |
+
 
 The LLM layer is provider-agnostic behind a trait (`LlmProvider::complete`); the supervisor/worker/gate logic never talks to a vendor SDK.

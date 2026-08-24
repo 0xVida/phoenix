@@ -18,6 +18,19 @@ macro_rules! define_id {
             pub fn nil() -> Self {
                 Self(uuid::Uuid::nil())
             }
+
+            /// Parse from canonical UUID string form (HTTP path params etc.).
+            pub fn parse(s: &str) -> Result<Self, uuid::Error> {
+                Ok(Self(uuid::Uuid::parse_str(s)?))
+            }
+        }
+
+        impl std::str::FromStr for $name {
+            type Err = uuid::Error;
+
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                Self::parse(s)
+            }
         }
 
         impl fmt::Display for $name {
