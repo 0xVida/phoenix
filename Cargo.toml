@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/supervisor",
+    "crates/worker",
+    "crates/api",
+    "crates/agents",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+swarm-core = { path = "crates/core" }
+swarm-supervisor = { path = "crates/supervisor" }
+swarm-worker = { path = "crates/worker" }
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+thiserror = "1"
+tokio = { version = "1.38", features = ["full"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["v4", "serde"] }

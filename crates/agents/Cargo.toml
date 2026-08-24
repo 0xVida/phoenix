@@ -1,0 +1,9 @@
+[package]
+name = "swarm-agents"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+# Phase 3 adds: serde, serde_json, async-trait, reqwest (or provider SDK-free HTTP), swarm-core

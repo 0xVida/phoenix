@@ -1,0 +1,9 @@
+[package]
+name = "swarm-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+swarm-core = { workspace = true }
+# Phase 2 adds: axum, tokio, tracing, tracing-subscriber, serde, serde_json
