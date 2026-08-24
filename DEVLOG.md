@@ -48,6 +48,6 @@ Phase 1 COMPLETE — workspace `cargo test` exit 0 (10 unit + 2 integration test
 - Second test covers the loud-death path: two consecutive crashes → attempts exhausted → terminal `Failed` + exactly one `MergeGated`; gate never opens on a failed task.
 - LESSON / dead end: first draft of the fail-closed test used hanging executors for every attempt — but a hanging worker keeps heartbeating, so it NEVER dies and there is nothing to recover from. Tests must model death as silence (abort) or as `Crashed`. Fixed by switching that mode to `CrashFast`.
 - Build fixes: `swarm-worker` was missing its `tracing` dep; removed a placeholder `cfg` warning in `swarm-api`.
-- Workspace result: `cargo test --workspace` exit 0 — 10 unit + 2 integration tests. Reliability loop (3 sequential runs of the integration suite) launched to satisfy "passes reliably, repeatedly".
+- Workspace result: `cargo test --workspace` exit 0 — 10 unit + 2 integration tests. Reliability CONFIRMED: the integration suite ran 3 consecutive times (`--test-threads=1`) — 3/3 green.
 
 
