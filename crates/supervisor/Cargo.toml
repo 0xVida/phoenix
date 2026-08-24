@@ -1,0 +1,18 @@
+[package]
+name = "swarm-supervisor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+swarm-core = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+# Only tests bridge supervisor↔worker directly; production wiring happens in
+# the api/bin layer so neither crate depends on the other.
+swarm-worker = { workspace = true }
+async-trait = { workspace = true }
+# Paused/auto-advancing virtual time for deterministic lease-expiry tests.
+tokio = { workspace = true, features = ["test-util"] }
