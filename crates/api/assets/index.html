@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Swarm CI — Self-Healing PR Review</title>
+<style>
+  :root {
+    --bg: #0b0f14; --panel: #11161d; --panel2: #161d26; --line: #223041;
+    --text: #c9d6e3; --dim: #7d8fa3; --green: #38e07b; --red: #ff5d73;
+    --amber: #ffb454; --cyan: #4dd0e1; --purple: #b388ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 "SF Mono", "Cascadia Code", Consolas, monospace;
+    max-width: 900px; margin-inline: auto; padding: 24px 16px 64px;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h1 .swarm { color: var(--cyan); }
+  .sub { color: var(--dim); font-size: 13px; margin-bottom: 20px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 16px; margin-bottom: 16px;
+  }
+  .card h2 { font-size: 13px; letter-spacing: .08em; text-transform: uppercase;
+             color: var(--dim); margin: 0 0 12px; }
+  label { display:block; color: var(--dim); font-size:12px; margin: 8px 0 2px; }
+  input, textarea {
+    width: 100%; background: var(--panel2); border: 1px solid var(--line);
+    border-radius: 6px; color: var(--text); padding: 8px 10px;
+    font: inherit; font-size: 13px;
+  }
+  textarea { min-height: 70px; resize: vertical; }
+  button {
+    background: var(--cyan); border: 0; color: #06222a; font-weight: 700;
+    font: inherit; font-size: 13px; padding: 9px 16px; border-radius: 6px;
+    cursor: pointer; margin-top: 10px;
+  }
+  button.kill { background: var(--red); color: #2a0510; margin-top: 0; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  .badge {
+    display:inline-block; padding: 3px 10px; border-radius: 999px;
+    border: 1px solid var(--line); font-size: 12px; color: var(--dim);
+  }
+  .badge.ok   { color: var(--green); border-color: var(--green); }
+  .badge.bad  { color: var(--red);   border-color: var(--red); }
+  .badge.warn { color: var(--amber); border-color: var(--amber); }
+  .mono-id { color: var(--purple); word-break: break-all; font-size: 12px; }
+  #feed { list-style: none; margin: 0; padding: 0; max-height: 420px; overflow-y: auto; }
+  #feed li {
+    padding: 7px 4px; border-bottom: 1px dashed var(--line); font-size: 13.5px;
+    display: flex; gap: 10px;
+  }
+  #feed li .t { color: var(--dim); flex: 0 0 62px; font-size: 11.5px; padding-top: 2px; }
+  #feed li.hl { background: rgba(56,224,123,.06); }
+  #feed li.bad { background: rgba(255,93,115,.07); }
+  .dot { width:9px; height:9px; border-radius:50%; background:#444; display:inline-block;
+         transition: background .2s; }
+  .dot.live { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .conn { font-size: 12px; color: var(--dim); }
+</style>
+</head>
+<body>
+  <h1><span class="swarm">SWARM CI</span> — self-healing PR review</h1>
+  <div class="sub">
+    planner + implementer agents behind a deterministic merge gate ·
+    kill the worker mid-task and watch the supervisor recover
+  </div>
+
+  <div class="card">
+    <h2>1 · Submit a pull request</h2>
+    <div class="row">
+      <div style="flex:1;min-width:180px">
+        <label>PR id</label><input id="prId" value="PR-101">
+      </div>
+      <div style="flex:2;min-width:220px">
+        <label>Title</label><input id="prTitle" value="Ledger sum drops last element">
+      </div>
+    </div>
+    <label>Bug description (what the planner reads)</label>
+    <textarea id="prBug">ledger::sum(&amp;[1,2,3]) returns 3 but must return 6 — the function skips the final element of the slice.</textarea>
+    <button id="submitBtn" onclick="submitTask()">Submit PR → planner + implementer</button>
+  </div>
+
+  <div class="card">
+    <h2>2 · Live task</h2>
+    <div class="row">
+      <span class="badge" id="statusBadge">no task yet</span>
+      <span class="badge" id="attemptBadge">attempt –</span>
+      <span class="conn"><span class="dot" id="hbDot"></span> heartbeats: <span id="hbCount">0</span></span>
+      <span style="flex:1"></span>
+      <button class="kill" id="killBtn" onclick="killTask()" disabled>⚡ KILL worker (demo)</button>
+    </div>
+    <div class="mono-id" id="taskIdLine">&nbsp;</div>
+  </div>
+
+  <div class="card">
+    <h2>3 · Event stream <span class="conn">(real backend state via SSE)</span></h2>
+    <ul id="feed"></ul>
+  </div>
+
+<script>
+let currentTask = null;
+let heartbeats = 0;
+
+const $ = (id) => document.getElementById(id);
+
+function timeNow() {
+  return new Date().toLocaleTimeString([], { hour12: false });
+}
+
+function addFeed(text, cls) {
+  const li = document.createElement('li');
+  if (cls) li.className = cls;
+  const t = document.createElement('span');
+  t.className = 't'; t.textContent = timeNow();
+  const m = document.createElement('span');
+  m.textContent = text;
+  li.append(t, m);
+  $('feed').prepend(li);
+}
+
+function setStatus(text, cls) {
+  const b = $('statusBadge');
+  b.textContent = text;
+  b.className = 'badge' + (cls ? ' ' + cls : '');
+}
+
+// Plain-language translation of internal events (spec §5 Phase 4).
+function humanize(name, d) {
+  switch (name) {
+    case 'task.created':
+      return `📝 PR ${d.pr_id} "${d.title}" accepted — dispatching to agents`;
+    case 'worker.started':
+      return `🔧 implementer started working (attempt ${d.attempt})`;
+    case 'worker.failed': {
+      const reason = d.reason || '';
+      if (/lease expired/i.test(reason))
+        return `💥 worker died mid-task — stopped sending heartbeats, lease expired (attempt ${d.attempt})`;
+      return `💥 worker failed (attempt ${d.attempt}) — ${reason}`;
+    }
+    case 'task.reassigned':
+      return `🔁 supervisor reassigned the task to a FRESH worker — now attempt ${d.attempt}`;
+    case 'stale_result.rejected':
+      return `🚫 old agent result rejected — this task had already been reassigned`;
+    case 'tests.passed':
+      return d.origin === 'real_cargo_test'
+        ? '✅ REAL cargo test run passed inside the sandbox'
+        : '✅ tests passed (simulated — dev mode)';
+    case 'tests.failed':
+      return `❌ tests failed — ${d.reason || 'see sandbox logs'}`;
+    case 'merge.gated':
+      return `⛔ merge gate BLOCKED — ${d.reason}`;
+    case 'merge.opened':
+      return '🎉 merge gate OPENED — the PR is safe to merge';
+    default:
+      return name;
+  }
+}
+
+const HIGHLIGHTS = new Set(['task.reassigned', 'merge.opened', 'merge.gated', 'stale_result.rejected']);
+
+function onEvent(name, data) {
+  if (!currentTask || data.task_id !== currentTask) {
+    // Events for other tasks still render, dimmed context is fine to skip.
+  }
+  if (name === 'worker.heartbeat') {
+    heartbeats++;
+    $('hbCount').textContent = heartbeats;
+    const dot = $('hbDot');
+    dot.classList.add('live');
+    setTimeout(() => dot.classList.remove('live'), 350);
+    return;
+  }
+
+  addFeed(humanize(name, data), HIGHLIGHTS.has(name) ? 'hl' : '');
+
+  switch (name) {
+    case 'task.created':
+      setStatus('planning…'); break;
+    case 'worker.started':
+      setStatus('implementer working');
+      $('attemptBadge').textContent = 'attempt ' + data.attempt;
+      break;
+    case 'task.reassigned':
+      setStatus('recovering — fresh worker assigned', 'warn');
+      $('attemptBadge').textContent = 'attempt ' + data.attempt;
+      break;
+    case 'worker.failed':
+      setStatus('worker lost', 'warn');
+      break;
+    case 'tests.passed':
+      setStatus('tests passed ✓', 'ok'); break;
+    case 'tests.failed':
+      setStatus('tests failed ✗', 'bad'); break;
+    case 'merge.opened':
+      setStatus('MERGED 🎉', 'ok');
+      $('killBtn').disabled = true;
+      break;
+    case 'merge.gated':
+      setStatus('BLOCKED ⛔', 'bad');
+      $('killBtn').disabled = true;
+      break;
+  }
+}
+
+async function submitTask() {
+  const body = {
+    pr_id: $('prId').value.trim() || 'PR-' + Date.now(),
+    title: $('prTitle').value.trim(),
+    bug_description: $('prBug').value.trim(),
+  };
+  if (!body.bug_description) { alert('Describe the bug first.'); return; }
+  $('submitBtn').disabled = true; $('killBtn').disabled = false;
+  $('feed').innerHTML = ''; heartbeats = 0; $('hbCount').textContent = '0';
+
+  const res = await fetch('/tasks', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const json = await res.json();
+  currentTask = json.task_id;
+  $('taskIdLine').textContent = 'task ' + currentTask;
+  setStatus('submitted…');
+}
+
+async function killTask() {
+  if (!currentTask) return;
+  const res = await fetch(`/tasks/${currentTask}/kill`, { method: 'POST' });
+  const json = await res.json();
+  addFeed(json.killed
+    ? '⚡ KILL signal sent to the worker mid-task — supervisor should notice within ~1.5 s'
+    : 'no live worker to kill right now', 'hl');
+}
+
+// Real backend stream — auto-reconnects on drop.
+const es = new EventSource('/events');
+es.onopen = () => addFeed('🔌 connected to backend event stream');
+es.onerror = () => { /* EventSource retries automatically */ };
+['task.created','worker.started','worker.heartbeat','worker.failed','task.reassigned',
+ 'stale_result.rejected','tests.passed','tests.failed','merge.gated','merge.opened']
+  .forEach((name) => es.addEventListener(name, (e) => {
+    try { onEvent(name, JSON.parse(e.data)); } catch (_) {}
+  }));
+
+</script>
+</body>
+</html>

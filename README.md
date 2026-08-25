@@ -28,8 +28,9 @@ crates/
 cargo build                              # workspace build
 cargo test                               # 10 unit + 2 integration tests (kill-and-reassign lives in swarm-supervisor)
 
-# Run the API (dev mode: workers are SIMULATED implementers until Phase 3):
+# Run the API + dashboard:
 RUST_LOG=info cargo run -p swarm-api
+# then open http://localhost:3000 — submit a PR, watch the event feed, hit ⚡ KILL mid-flight
 ```
 
 Then exercise the self-healing flow live:

@@ -21,12 +21,20 @@ use crate::state::AppState;
 
 pub fn router(state: AppState) -> Router {
     Router::new()
+        .route("/", get(index))
         .route("/tasks", post(submit_task).get(list_tasks))
         .route("/tasks/:id", get(get_task))
         .route("/tasks/:id/kill", post(kill_task))
         .route("/events", get(events))
         .with_state(state)
 }
+
+/// Self-hosted demo dashboard (Phase 4): renders the REAL `/events` stream in
+/// plain language. No build step, no CDN — one embedded HTML file.
+async fn index() -> axum::response::Html<&'static str> {
+    axum::response::Html(include_str!("../assets/index.html"))
+}
+
 
 async fn submit_task(State(st): State<AppState>, Json(spec): Json<TaskSpec>) -> Json<serde_json::Value> {
     let id = st.supervisor.submit_pr(spec);

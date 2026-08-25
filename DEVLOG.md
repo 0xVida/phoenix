@@ -1,15 +1,14 @@
 # Swarm CI — Dev Log
 
 ## Current status
-Phase 3 COMPLETE + LIVE PROVIDERS WIRED — Groq (`openai/gpt-oss-120b`) plans fixes, implementer runs REAL cargo test in per-attempt sandboxes, Google Gemini auto-fallback armed; live HTTP run merged PR-100 on attempt 1 with `origin: RealCargoTest`. Next action: Phase 4 minimal frontend over SSE.
+Phase 4 COMPLETE — self-hosted dashboard at `/` renders the real SSE stream in plain language (submit form, live status badge, heartbeat pulse, ⚡KILL button); verified serving + another live agent merge over HTTP. Next action: Phase 5 demo rehearsal & failure drills.
 
 ## Phase progress
 - Phase 0: done
 - Phase 1: done — typed state machine, supervisor lease/reaper/reassignment with attempt-based fencing, killable single-task worker runtime; THE test (`killed_worker_is_reassigned_and_task_completes`) plus the attempts-exhaustion test both pass.
 - Phase 2: done — `POST /tasks`, `GET /tasks(/:id)`, demo-kill endpoint, SSE `/events` muxing real backend events; live HTTP smoke test green.
-- Phase 3: done — `LlmProvider` trait (`MockLlmProvider`, `AnthropicProvider` via env), planner→`FixPlan`(typed), implementer applies plan in sandbox and emits `TestReport{origin: RealCargoTest}` from actual cargo runs; api selects agent mode when `LLM_PROVIDER=anthropic` and flips gate to require real provenance.
-- Phase 4: not started
-- Phase 4: not started
+- Phase 3: done — provider-agnostic `LlmProvider` with LIVE providers (Groq `openai/gpt-oss-120b` primary, Google Gemini auto-fallback), typed `FixPlan`, implementer runs REAL cargo test in per-attempt sandboxes; gate requires RealCargoTest provenance in agent mode. Live PR-100 merged.
+- Phase 4: done — embedded dashboard (`crates/api/assets/index.html` served at `/`): EventSource stream → plain-language feed (incl. the spec's exact "Old agent result rejected…" line), submit form, kill button, heartbeats as live indicator. Verified: HTML served + PR-104 merged through the real agent path.
 - Phase 5: not started
 
 ## Decisions made
@@ -36,6 +35,7 @@ Phase 3 COMPLETE + LIVE PROVIDERS WIRED — Groq (`openai/gpt-oss-120b`) plans f
 - 2026-08-25 — Model defaults corrected against live catalogs: Groq's `llama-3.3-70b-versatile` no longer exists → `openai/gpt-oss-120b`; Google retired `gemini-2.0-flash` → `gemini-3.6-flash`. Lesson: model ids rot — treat them as env config, never hardcode.
 - 2026-08-25 — Planner prompt now embeds the sandbox's CURRENT files (`collect_context`) so real models fix actual source instead of guessing; mock flow unaffected.
 - 2026-08-25 — Jina AI key stored in `.env` for later diff/page fetching; no code path uses it yet (deliberately — no speculative features).
+- 2026-08-25 (Phase 4) — Dashboard is served BY the binary (`include_str!` of one static file at `/`): zero build step, zero CDN, no CORS. Events consumed via native `EventSource` (auto-reconnect). Heartbeats render as a pulsing indicator + counter instead of feed rows so the recovery narrative stays readable; the spec's exact Phase 4 line ("Old agent result rejected — this task had already been reassigned") is implemented for `stale_result.rejected`.
 
 ## Open questions / blockers
 - None blocking. rustc/cargo 1.85.0 on box; edition 2021 chosen for dep compatibility.
@@ -87,6 +87,12 @@ Phase 3 COMPLETE + LIVE PROVIDERS WIRED — Groq (`openai/gpt-oss-120b`) plans f
 - Diagnosed via structured logs; queried Groq `/v1/models`; switched to `openai/gpt-oss-120b` + `gemini-3.6-flash`.
 - SECOND live run: **PR-100 merged on attempt 1** — planner produced a valid typed plan, implementer applied it in a fresh sandbox, REAL cargo test passed, `TestsPassed { origin: RealCargoTest }`, `merge.opened`. Gate is now provably tied to genuine test runs in production config.
 - Workspace tests green after all changes (`/tmp/swarm_p3d_all.log`, EXIT:0): 9 agents units (incl. parser + fallback chain), 2 real-cargo agent flows, 10 core, 2 kill-and-reassign.
+
+### 2026-08-25 — Phase 4: self-hosted dashboard over the real SSE stream
+- New `crates/api/assets/index.html` (embedded via `include_str!`, served at `/`): submit form (prefilled with the ledger bug), live task panel (status badge, attempt badge, heartbeat pulse+counter), ⚡KILL button wired to `POST /tasks/:id/kill`, and an event feed translating every `SwarmEvent` into plain language — e.g. lease expiry renders as "worker died mid-task — stopped sending heartbeats", reassignment as "supervisor reassigned the task to a FRESH worker", and the spec-mandated line for stale-result fencing.
+- Verified: binary builds (`EXIT:0`), `GET /` returns the page, and a fresh PR-104 submission through the REAL Groq agent merged again over HTTP.
+- Remaining for Phase 5: rehearse the exact 2-minute flow twice, drill failure modes (bad key / network blip / attempts exhaustion), confirm the kill moment reads instantly on screen.
+
 
 
 
