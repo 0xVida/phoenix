@@ -54,12 +54,19 @@ async fn send(
 }
 
 #[tokio::test]
-async fn dashboard_is_served_at_root() {
+async fn landing_and_dashboard_are_served() {
     let (app, _spawner) = setup();
-    let (status, html) = send(app, "GET", "/", None).await;
+    // Landing at "/" (project overview).
+    let (status, html) = send(app.clone(), "GET", "/", None).await;
     assert_eq!(status, StatusCode::OK);
-    assert!(html.contains("SWARM CI"), "dashboard html expected");
+    assert!(html.contains("PHOENIX CI"), "landing html expected");
+
+    // Dashboard moved to "/app".
+    let (status, dash) = send(app, "GET", "/app", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(dash.contains("Quick pick"), "dashboard html expected");
 }
+
 
 #[tokio::test]
 async fn submit_then_snapshot_then_list() {

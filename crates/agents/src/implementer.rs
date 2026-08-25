@@ -75,13 +75,38 @@ impl ImplementerAgent {
         let context = collect_context(&sandbox)?;
 
 
-        // 3. Planner → typed plan.
-        let raw = self
-            .provider
-            .complete(&planner_prompt(&spec.bug_description, &context))
-            .instrument(tracing::info_span!("planner"))
-            .await?;
-        let plan = FixPlan::from_llm_text(&raw)?;
+        // 3. Planner → typed plan. One free re-ask on unparseable output so
+        // transient model sloppiness doesn't burn a whole supervisor attempt.
+        let mut prompt = planner_prompt(&spec.bug_description, &context);
+        let plan = {
+            let mut plan = None;
+            for try_n in 1..=2 {
+                if try_n == 2 {
+                    prompt.push_str(
+                        "\n\nREMINDER: your previous reply was not usable. Respond AGAIN \
+                         with ONLY one valid JSON object matching the schema — no prose, \
+                         no markdown fences, no text after the object.",
+                    );
+                }
+                let raw = self
+                    .provider
+                    .complete(&prompt)
+                    .instrument(tracing::info_span!("planner", attempt_of_try = try_n))
+                    .await?;
+                match FixPlan::from_llm_text(&raw) {
+                    Ok(p) => {
+                        plan = Some(p);
+                        break;
+                    }
+                    Err(e) if try_n == 1 => {
+                        tracing::warn!(error = %e, "plan parse failed; retrying once");
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+            plan.expect("loop returns on second failure")
+        };
+
 
         // 4. Apply whole-file replacements.
         {

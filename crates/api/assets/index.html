@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Swarm CI — Self-Healing PR Review</title>
+<title>Phoenix CI — Self-Healing PR Review</title>
 <style>
   :root {
     --bg: #0b0f14; --panel: #11161d; --panel2: #161d26; --line: #223041;
@@ -63,7 +63,7 @@
 </style>
 </head>
 <body>
-  <h1><span class="swarm">SWARM CI</span> — self-healing PR review</h1>
+  <h1><span class="swarm">🔥 PHOENIX CI</span> — self-healing PR review</h1>
   <div class="sub">
     planner + implementer agents behind a deterministic merge gate ·
     kill the worker mid-task and watch the supervisor recover
@@ -71,7 +71,12 @@
 
   <div class="card">
     <h2>1 · Submit a pull request</h2>
+    <label>Quick pick — a bundled demo PR (fills everything below)</label>
+    <select id="preset" onchange="applyPreset()">
+      <option value="">— choose a demo PR —</option>
+    </select>
     <label>PR link (optional — GitHub PR or any git URL)</label>
+
     <input id="prUrl" placeholder="https://github.com/<owner>/swarm-demo-target/pull/102">
     <div class="row">
       <div style="flex:1;min-width:200px">
@@ -202,13 +207,76 @@ function onEvent(name, data) {
     case 'merge.opened':
       setStatus('MERGED 🎉', 'ok');
       $('killBtn').disabled = true;
+      $('submitBtn').disabled = false; // reset: ready for the next PR
       break;
     case 'merge.gated':
       setStatus('BLOCKED ⛔', 'bad');
       $('killBtn').disabled = true;
+      $('submitBtn').disabled = false; // reset: pick another PR
       break;
   }
 }
+
+// Demo catalog: loaded live from the backend (/presets proxies the target
+// repo's prs.json), with three offline fallbacks if that fetch fails.
+let PRESETS = {
+  "https://github.com/Ay-obami/swarm-demo-target/pull/3": {
+    title: "Discount stacking ignores the cap",
+    bug: "Stacked discounts ignore discount_cap_cents: subtotal 100.00 with 15% + 3.00 fixed currently grants 18.00 — the cap of 5.00 must win. Fix src/discounts.rs.",
+  },
+  "https://github.com/Ay-obami/swarm-demo-target/pull/1": {
+    title: "FX conversion loses cents",
+    bug: "convert() snaps results to whole units: convert(999, 12345) must be 1233, not 1200. Apply rate_bps exactly once and preserve cent precision in src/currency.rs.",
+  },
+  "https://github.com/Ay-obami/swarm-demo-target/pull/2": {
+    title: "Batch reservation can oversell",
+    bug: "reserve() validates each request against TOTAL stock instead of remaining availability, so [3,3,5] on stock 10 / reserved 4 succeeds. Enforce per-grant remaining stock in src/inventory.rs.",
+  },
+};
+
+function presetKey(p) {
+  // Prefer repo_url+git_ref (branch form); fall back to pr_url.
+  return p.repo_url ? `${p.repo_url}#${p.git_ref}` : (p.pr_url || p.branch || "");
+}
+
+async function loadPresets() {
+  try {
+    const res = await fetch("/presets");
+    if (!res.ok) return;
+    const list = await res.json();
+    if (!Array.isArray(list) || list.length === 0) return;
+    PRESETS = {};
+    const sel = $("preset");
+    sel.innerHTML = '<option value="">— choose a demo PR —</option>';
+    for (const p of list) {
+      const key = presetKey(p);
+      PRESETS[key] = { title: p.title, bug: p.bug, prUrl: p.pr_url || "" };
+      const opt = document.createElement("option");
+      opt.value = key;
+      opt.textContent = `PR-${p.label} · ${p.title}`;
+      sel.appendChild(opt);
+    }
+    addFeed(`📋 loaded ${list.length} demo PRs into quick-pick`);
+  } catch (_) { /* offline → builtin presets remain */ }
+}
+
+function applyPreset() {
+  const key = $("preset").value;
+  if (!key || !PRESETS[key]) return;
+  const p = PRESETS[key];
+  if (key.includes("#")) {
+    const [repo, ref] = key.split("#");
+    $("prUrl").value = repo;
+    $('gitRef').value = ref;
+  } else {
+    $("prUrl").value = p.prUrl || key;
+    $('gitRef').value = "";
+  }
+  $('prTitle').value = p.title;
+  $('prBug').value = p.bug;
+}
+loadPresets();
+
 
 async function submitTask() {
   const prLink = $('prUrl').value.trim();
@@ -219,9 +287,15 @@ async function submitTask() {
     title: $('prTitle').value.trim(),
     bug_description: $('prBug').value.trim(),
   };
+
   if (!body.bug_description) { alert('Describe the bug first.'); return; }
-  if (prLink) body.pr_url = prLink;
-  if (gitRef) body.git_ref = gitRef;
+  // Presets carry a repo URL + ref (branch form); plain links use pr_url.
+  if (gitRef && prLink) {
+    body.repo_url = prLink;
+    body.git_ref = gitRef;
+  } else if (prLink) {
+    body.pr_url = prLink;
+  }
 
   $('submitBtn').disabled = true; $('killBtn').disabled = false;
   $('feed').innerHTML = ''; heartbeats = 0; $('hbCount').textContent = '0';

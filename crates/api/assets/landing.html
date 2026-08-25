@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Phoenix CI — Self-Healing PR Review</title>
+<style>
+  :root {
+    --bg:#0a0d12; --panel:#121821; --line:#223041; --text:#c9d6e3; --dim:#7d8fa3;
+    --phoenix:#ff7a45; --phoenix2:#ffb454; --cyan:#4dd0e1; --green:#38e07b; --red:#ff5d73;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:15px/1.55 "SF Mono","Cascadia Code",Consolas,monospace; }
+  .wrap { max-width:960px; margin-inline:auto; padding:48px 20px 80px; }
+  .flame { font-size:44px; }
+  h1 { font-size:34px; line-height:1.15; margin:8px 0 10px; }
+  h1 .hot { background:linear-gradient(90deg,var(--phoenix),var(--phoenix2));
+            -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .tag { color:var(--cyan); font-size:16px; margin-bottom:22px; }
+  p.lede { color:var(--text); font-size:15px; max-width:70ch; }
+  .cta { display:flex; gap:14px; flex-wrap:wrap; margin:26px 0 40px; }
+  a.btn { text-decoration:none; font-weight:700; font-size:14px;
+          padding:12px 20px; border-radius:8px; border:1px solid var(--line); color:var(--text); }
+  a.btn.primary { background:linear-gradient(90deg,var(--phoenix),var(--phoenix2));
+                  color:#2a0f00; border:0; }
+  a.btn:hover { filter:brightness(1.1); }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:16px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:18px; }
+  .card h3 { margin:0 0 8px; font-size:14px; color:var(--phoenix2); letter-spacing:.05em; }
+  .card p { margin:0; font-size:13.5px; color:var(--text); }
+  .card code { color:var(--cyan); }
+  pre.flow { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+             padding:18px; overflow-x:auto; font-size:12.5px; color:var(--dim); }
+  pre.flow b { color:var(--green); } pre.flow i { color:var(--red); font-style:normal; }
+  h2.sec { font-size:13px; letter-spacing:.08em; text-transform:uppercase;
+           color:var(--dim); margin:38px 0 12px; }
+  footer { margin-top:46px; color:var(--dim); font-size:12.5px; }
+  footer a { color:var(--cyan); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="flame">🔥</div>
+  <h1><span class="hot">PHOENIX CI</span></h1>
+  <div class="tag">self-healing PR review — agents propose, deterministic code decides.</div>
+
+  <p class="lede">
+    Paste a pull-request link. A <b>planner agent</b> reads the real code and drafts a
+    typed fix plan. An <b>implementer agent</b> applies it inside an isolated sandbox and
+    runs the project's actual test suite. If that worker dies mid-flight, a
+    <b>supervisor</b> notices via heartbeats/leases and reassigns the work to a fresh
+    worker — nothing is lost. And no matter what any agent claims, the merge gate opens
+    only for a <b>genuine passing test run</b>.
+  </p>
+
+  <div class="cta">
+    <a class="btn primary" href="/app">🔥 Launch dashboard</a>
+    <a class="btn" href="https://github.com/Ay-obami/swarm-demo-target" target="_blank">Demo target repo (20 open PRs)</a>
+    <a class="btn" href="https://github.com/Ay-obami/Swarm_CI" target="_blank">Phoenix CI source</a>
+  </div>
+
+  <h2 class="sec">The two-minute story</h2>
+  <pre class="flow">
+submit PR link ──▶ planner (LLM) ──▶ typed fix plan
+                        │
+                        ▼
+              implementer worker ──▶ edits sandbox ──▶ <b>REAL cargo test</b>
+                        │
+              ⚡ kill it here…           …or let it finish
+                        │                        │
+                        ▼                        ▼
+        supervisor: lease expired            ✅ tests passed
+        🔁 reassign to fresh worker          🎉 merge gate OPENED
+                        └──────▶ same happy ending ◀──────┘
+  </pre>
+
+  <h2 class="sec">Why it doesn't hallucinate its way to a merge</h2>
+  <div class="grid">
+    <div class="card"><h3>TYPED PLANS</h3><p>The model returns a structured
+      plan (<code>{edits:[{path,content}]}</code>) parsed and path-validated —
+      prose is never executed.</p></div>
+    <div class="card"><h3>FENCED SANDBOXES</h3><p>Every attempt clones the PR
+      head into a throwaway copy. A killed worker leaves nothing behind for
+      the next one to trip over.</p></div>
+    <div class="card"><h3>LEASES + FENCING</h3><p>Heartbeats renew a lease.
+      Miss them and the supervisor declares death and reassigns. Zombie
+      results from old attempts are rejected by attempt-number fencing.</p></div>
+    <div class="card"><h3>PROVENANCE-GATED MERGES</h3><p>The gate reads a
+      report stamped by the real test runner. “Trust me, tests pass” from an
+      agent is structurally impossible to act on.</p></div>
+  </div>
+
+  <footer>
+    Rust · Tokio · Axum · Groq/Gemini behind one provider trait ·
+    <a href="/app">dashboard</a> · <a href="https://github.com/Ay-obami/Swarm_CI">source</a>
+  </footer>
+</div>
+</body>
+</html>

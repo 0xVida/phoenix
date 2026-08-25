@@ -1,4 +1,7 @@
-# Swarm CI — Self-Healing PR Review
+# Phoenix CI — Self-Healing PR Review
+
+*(formerly “Swarm CI” — renamed for the demo; internal crate names still say `swarm-*`.)*
+
 
 A planner agent and an implementer agent review and fix a pull request behind a **deterministic merge gate**. If the implementer process is killed mid-task, a supervisor detects the failure via a heartbeat/lease mechanism, reassigns the work to a fresh worker, and the system finishes correctly — demonstrated live.
 

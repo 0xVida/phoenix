@@ -19,14 +19,73 @@ use swarm_core::task::{TaskRecord, TaskSpec};
 
 use crate::state::AppState;
 
+/// Live catalog of demo PRs published by the target repo (prs.json on its
+/// default branch). Transformed into dashboard-ready quick-pick entries.
+const DEFAULT_PRESETS_URL: &str =
+    "https://raw.githubusercontent.com/Ay-obami/swarm-demo-target/main/prs.json";
+
+async fn presets(
+    State(_st): State<AppState>,
+) -> Result<axum::Json<serde_json::Value>, (StatusCode, axum::Json<serde_json::Value>)> {
+    let url = std::env::var("SWARM_PRESETS_URL").unwrap_or_else(|_| DEFAULT_PRESETS_URL.into());
+    let http = reqwest::Client::new();
+    let response = http
+        .get(url)
+        .timeout(std::time::Duration::from_secs(8))
+        .send()
+        .await
+        .and_then(|r| r.error_for_status())
+        .map_err(|e| (
+            StatusCode::BAD_GATEWAY,
+            axum::Json(serde_json::json!({"error": format!("preset catalog unavailable: {e}")})),
+        ))?;
+    let body = response.text().await.map_err(|e| (
+        StatusCode::BAD_GATEWAY,
+        axum::Json(serde_json::json!({"error": format!("preset catalog read failed: {e}")})),
+    ))?;
+    let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
+        (
+            StatusCode::BAD_GATEWAY,
+            axum::Json(serde_json::json!({"error": format!("bad preset catalog: {e}")})),
+        )
+    })?;
+
+    let repo_git = v["repo_git"].as_str().unwrap_or_default().to_string();
+    let mut out = Vec::new();
+    for p in v["prs"].as_array().cloned().unwrap_or_default() {
+        let (Some(branch), Some(title)) = (
+            p["branch"].as_str().map(str::to_owned),
+            p["title"].as_str().map(str::to_owned),
+        ) else {
+            continue;
+        };
+        out.push(serde_json::json!({
+            "label": p["label"],
+            "title": title,
+            "bug": p["description"],
+            "repo_url": repo_git,
+            "git_ref": branch,
+        }));
+    }
+    Ok(axum::Json(serde_json::Value::Array(out)))
+}
+
 pub fn router(state: AppState) -> Router {
     Router::new()
-        .route("/", get(index))
+        .route("/", get(landing))
+        .route("/app", get(index))
+        .route("/presets", get(presets))
         .route("/tasks", post(submit_task).get(list_tasks))
         .route("/tasks/:id", get(get_task))
+
         .route("/tasks/:id/kill", post(kill_task))
         .route("/events", get(events))
         .with_state(state)
+}
+
+/// Project landing page — what Phoenix CI is, how it works, links.
+async fn landing() -> axum::response::Html<&'static str> {
+    axum::response::Html(include_str!("../assets/landing.html"))
 }
 
 /// Self-hosted demo dashboard (Phase 4): renders the REAL `/events` stream in

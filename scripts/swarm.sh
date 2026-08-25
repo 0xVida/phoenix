@@ -59,10 +59,10 @@ case "$LLM_PROVIDER" in
   anthropic) MODEL="${ANTHROPIC_MODEL:-claude-sonnet-4-20250514}" ;;
 esac
 echo ""
-echo "  🐝 SWARM CI — self-healing PR review"
+echo "  🔥 PHOENIX CI — self-healing PR review"
 echo "     provider : $LLM_PROVIDER${MODEL:+ ($MODEL)}"
-echo "     bind     : http://localhost:$PORT   (dashboard at /)"
-echo "     demo     : submit a PR on the page, then hit ⚡KILL mid-flight"
+echo "     bind     : http://localhost:$PORT   (landing at / · dashboard at /app)"
+echo "     demo     : pick a PR on /app, submit, then hit ⚡KILL mid-flight"
 echo ""
 
 RUN=(cargo run -p swarm-api)

@@ -6,7 +6,7 @@ set -u
 cd "$(dirname "$0")/.."
 
 set -a; source .env; set +a
-export GROQ_API_KEY=gsk_invalid_on_purpose
+export GROQ_API_KEY=invalid-key-on-purpose
 export GOOGLE_API_KEY=google_invalid_on_purpose
 export SWARM_MAX_ATTEMPTS=2
 

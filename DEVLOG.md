@@ -123,6 +123,16 @@ Phase 5 COMPLETE — SUBMISSION READY, plus post-Done hardening: hierarchical tr
   2. Groq 429 TPM + model prose around JSON broke naive plan extraction. Fix: quote-aware balanced-brace extractor tries direct parse → fenced blocks → every complete `{…}` object until one validates.
 - FINAL LIVE RESULT: pasted `…/pull/1` → **status merged, attempt 1, WALL 12.3 s**, `TestsPassed { origin: RealCargoTest }`. Workspace suite green throughout (`/tmp/swarm_git_t3.log`). GitHub-side gotcha logged: force-pushing a PR branch auto-updates its head (used to sync reseeded branches); refs/pull/* themselves are read-only on GitHub.
 
+### 2026-08-25 — Phoenix CI: 20-PR catalog, landing page, UX fixes
+- **Renamed to PHOENIX CI** 🔥 (user-facing brand: dashboard, landing, launcher banner, README). Internal crate names stay `swarm-*` for a reviewable diff — logged as deliberate.
+- **Landing page** at `/` (`assets/landing.html`): hero, flow diagram, architecture cards, links to dashboard/target/source. Dashboard moved to `/app`; all API routes unchanged.
+- **Demo catalog grown to 20 PRs**: new `tax` + `shipping` modules and `fiscal_quarter` extend the domain; `prs.json` is the single source of truth (label/slug/title/description/file/find/replace per PR); `scripts/seed_prs.py` applies each seeded bug on its own branch off green main, force-pushes, opens REAL GitHub PRs, closes stale ones, and emits copy-friendly `OPEN_PRS.md`.
+- **`GET /presets`**: proxies the live catalog (raw prs.json, `SWARM_PRESETS_URL` overridable) into dashboard quick-pick entries `{label,title,bug,repo_url,git_ref}`. Dashboard loads it on boot (3 offline fallbacks retained).
+- **Submit-reset bug fixed**: terminal events (`merge.opened`, `merge.gated`) now re-enable the Submit button — no reload needed between demos.
+- **Planner parse retry**: one free re-ask with a stricter JSON-only reminder when output can't be parsed, so transient sloppiness doesn't burn a supervisor attempt.
+- Live verifications: `/presets` returns 20 entries from the real repo; PR-110 (new bug class) solved attempt-1 in ~34 s via Gemini fallback (Groq TPM-limited), matching the earlier 12.3 s Groq-path merge of pull/1. Both fail-closed and success paths exercised with real LLMs against real GitHub branches.
+
+
 
 
 

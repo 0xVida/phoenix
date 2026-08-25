@@ -17,6 +17,8 @@ tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+reqwest = { workspace = true }
+
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

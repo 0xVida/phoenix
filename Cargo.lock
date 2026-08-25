@@ -1034,6 +1034,7 @@ dependencies = [
  "async-trait",
  "axum",
  "http-body-util",
+ "reqwest",
  "serde",
  "serde_json",
  "swarm-agents",
