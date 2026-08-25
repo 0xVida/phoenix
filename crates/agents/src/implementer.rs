@@ -43,6 +43,22 @@ impl ImplementerAgent {
     /// and each worker runs on its own task, so blocking here does not stall
     /// other tasks on multi-thread runtimes.
     pub async fn fix(&self, bug_description: &str) -> Result<TestReport, AgentError> {
+        // Demo affordance (Phase 5): optionally widen the mid-flight window so
+        // a presenter can hit ⚡KILL while the planner is thinking.
+        // Read once per process; unset => zero delay.
+        static PLAN_DELAY: std::sync::OnceLock<std::time::Duration> = std::sync::OnceLock::new();
+        let delay = *PLAN_DELAY.get_or_init(|| {
+            std::time::Duration::from_millis(
+                std::env::var("SWARM_PLAN_DELAY_MS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0),
+            )
+        });
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
+
         // Gather the sandbox's current source so the planner fixes real code.
         // Nested fn keeps this single-purpose and side-effect free.
         fn collect_context(root: &Path) -> std::io::Result<Vec<(String, String)>> {

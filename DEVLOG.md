@@ -1,7 +1,7 @@
 # Swarm CI — Dev Log
 
 ## Current status
-Phase 4 COMPLETE — self-hosted dashboard at `/` renders the real SSE stream in plain language (submit form, live status badge, heartbeat pulse, ⚡KILL button); verified serving + another live agent merge over HTTP. Next action: Phase 5 demo rehearsal & failure drills.
+Phase 5 COMPLETE — SUBMISSION READY. Rehearsal script ran the full kill→recover→merge demo twice back-to-back with real Groq planning; provider-outage drill proved fail-closed (gate never opened). All Definition-of-Done boxes demonstrably met. Remaining optional polish: none blocking.
 
 ## Phase progress
 - Phase 0: done
@@ -9,6 +9,7 @@ Phase 4 COMPLETE — self-hosted dashboard at `/` renders the real SSE stream in
 - Phase 2: done — `POST /tasks`, `GET /tasks(/:id)`, demo-kill endpoint, SSE `/events` muxing real backend events; live HTTP smoke test green.
 - Phase 3: done — provider-agnostic `LlmProvider` with LIVE providers (Groq `openai/gpt-oss-120b` primary, Google Gemini auto-fallback), typed `FixPlan`, implementer runs REAL cargo test in per-attempt sandboxes; gate requires RealCargoTest provenance in agent mode. Live PR-100 merged.
 - Phase 4: done — embedded dashboard (`crates/api/assets/index.html` served at `/`): EventSource stream → plain-language feed (incl. the spec's exact "Old agent result rejected…" line), submit form, kill button, heartbeats as live indicator. Verified: HTML served + PR-104 merged through the real agent path.
+- Phase 5: done — `scripts/rehearse.sh 2 2` drove submit→kill@2s→reassign→real-test-pass→merge TWICE consecutively (SSE showed worker.failed/task.reassigned both times); `scripts/failure_drill.sh` invalidated both provider keys → system failed closed (task Failed, exactly 1 merge.gated, 0 merge.opened).
 - Phase 5: not started
 
 ## Decisions made
@@ -36,6 +37,9 @@ Phase 4 COMPLETE — self-hosted dashboard at `/` renders the real SSE stream in
 - 2026-08-25 — Planner prompt now embeds the sandbox's CURRENT files (`collect_context`) so real models fix actual source instead of guessing; mock flow unaffected.
 - 2026-08-25 — Jina AI key stored in `.env` for later diff/page fetching; no code path uses it yet (deliberately — no speculative features).
 - 2026-08-25 (Phase 4) — Dashboard is served BY the binary (`include_str!` of one static file at `/`): zero build step, zero CDN, no CORS. Events consumed via native `EventSource` (auto-reconnect). Heartbeats render as a pulsing indicator + counter instead of feed rows so the recovery narrative stays readable; the spec's exact Phase 4 line ("Old agent result rejected — this task had already been reassigned") is implemented for `stale_result.rejected`.
+- 2026-08-25 (Phase 5) — Demo repeatability: `scripts/rehearse.sh [runs] [kill_after_s]` and `scripts/failure_drill.sh` committed so rehearsal/me drills are one command each, not tribal memory.
+- 2026-08-25 (Phase 5) — `SWARM_PLAN_DELAY_MS` demo knob (default 0): with fast Groq responses the whole fix finished <2 s, racing the presenter's kill; the knob pauses pre-planning to widen the mid-flight window. Async sleep only — heartbeats keep flowing during the pause. Unset in tests/production.
+- 2026-08-25 (Phase 5) — Failure-drill semantics locked: provider outage ⇒ attempts exhaust ⇒ task `Failed`, exactly ONE `merge.gated`, ZERO `merge.opened`. Asserted by script, proven by drill.
 
 ## Open questions / blockers
 - None blocking. rustc/cargo 1.85.0 on box; edition 2021 chosen for dep compatibility.
@@ -92,6 +96,14 @@ Phase 4 COMPLETE — self-hosted dashboard at `/` renders the real SSE stream in
 - New `crates/api/assets/index.html` (embedded via `include_str!`, served at `/`): submit form (prefilled with the ledger bug), live task panel (status badge, attempt badge, heartbeat pulse+counter), ⚡KILL button wired to `POST /tasks/:id/kill`, and an event feed translating every `SwarmEvent` into plain language — e.g. lease expiry renders as "worker died mid-task — stopped sending heartbeats", reassignment as "supervisor reassigned the task to a FRESH worker", and the spec-mandated line for stale-result fencing.
 - Verified: binary builds (`EXIT:0`), `GET /` returns the page, and a fresh PR-104 submission through the REAL Groq agent merged again over HTTP.
 - Remaining for Phase 5: rehearse the exact 2-minute flow twice, drill failure modes (bad key / network blip / attempts exhaustion), confirm the kill moment reads instantly on screen.
+
+### 2026-08-25 — Phase 5: rehearsed ×2, drilled, submission-ready
+- `scripts/rehearse.sh 2 2`: two consecutive full demos — submit PR → planner (real Groq) starts → ⚡KILL at t=2 s → lease expiry detected → visible reassignment → fresh implementer plans + runs REAL cargo test → merged. SSE transcript per run contained worker.failed AND task.reassigned before merge.opened. **2/2 PASS.**
+- Discovery during rehearsal: Groq+cargo now finish in <2 s, so the default kill window raced completion (first attempt showed no reassigned events). Added demo knob `SWARM_PLAN_DELAY_MS` (async pause pre-planning; heartbeats unaffected) and re-ran with 4000 ms — recovery path fully visible.
+- `scripts/failure_drill.sh` (both provider keys invalidated): attempts exhausted → task `failed`, exactly one `merge.gated`, ZERO `merge.opened`. **PASS — fail-closed proven under total provider outage.**
+- Fixed along the way: swarm-agents needed tokio as a real dep for async sleep; shell typo in drill summary; scripts no longer swallow build errors.
+- DEFINITION OF DONE: all five boxes met (reliable Phase-1 test; live real-kill demo with visible recovery; gate provably tied to RealCargoTest; stranger-ready DEVLOG; ≥2 end-to-end rehearsals).
+
 
 
 
