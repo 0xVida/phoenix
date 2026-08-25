@@ -1,16 +1,33 @@
-//! Agent/LLM abstraction layer — Phase 3. Kept OUT of reliability logic
-//! (BUILD_PROMPT.md §0.5): nothing in core/supervisor/worker may import this.
+//! Agent/LLM abstraction layer (Phase 3). Kept OUT of reliability logic
+//! (BUILD_PROMPT §0.5): nothing in core/supervisor/worker imports this crate.
+//! Agents PROPOSE — plans and fixes; the deterministic gate still owns truth.
 //!
-//! Plan:
-//! - `LlmProvider` trait (`complete(&str) -> Result<String, LlmError>`),
-//!   provider-agnostic; key/base URL from env (`LLM_PROVIDER`,
-//!   `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`) — never hardcoded, never committed.
-//! - `MockLlmProvider` for offline dev; `AnthropicProvider` as first real impl.
-//! - Planner agent: diff/bug description → TYPED plan (Serde structs, not free text).
-//! - Implementer agent: executes plan inside a sandbox working copy; produces a
-//!   `TestReport` only by actually running tests (origin = RealCargoTest).
+//! Provider-agnostic per spec: everything talks to [`llm::LlmProvider`];
+//! keys/base URLs come from env (`LLM_PROVIDER`, `ANTHROPIC_API_KEY`,
+//! `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL`) and are never hardcoded.
 
-/// Placeholder to keep the crate compiling until Phase 3 lands.
+pub mod implementer;
+pub mod llm;
+pub mod plan;
+
+pub use implementer::ImplementerAgent;
+pub use llm::{
+    provider_from_env, AnthropicProvider, FallbackProvider, GoogleProvider, GroqProvider,
+    LlmError, LlmProvider, MockLlmProvider,
+};
+pub use plan::{planner_prompt, FixPlan, PlannedEdit};
+
 #[derive(Debug, thiserror::Error)]
-#[error("agents not implemented yet (Phase 3)")]
-pub struct NotImplemented;
+pub enum AgentError {
+    #[error(transparent)]
+    Llm(#[from] LlmError),
+
+    #[error("could not parse a valid fix plan from the model output: {0}")]
+    PlanParse(String),
+
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+
+    #[error("unsafe path in plan edit: {0}")]
+    UnsafePath(String),
+}

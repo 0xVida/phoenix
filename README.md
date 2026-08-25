@@ -65,6 +65,31 @@ sleep 6    && curl -s localhost:3000/tasks/$TID            # reassigned + merged
 | `SWARM_REAP_INTERVAL_MS`| no  | `250`                          | Supervisor lease-reaper scan cadence       |
 | `SWARM_MAX_ATTEMPTS`| no      | `3`                            | Reassignments before the task fails        |
 | `SWARM_SIM_WORK_MS`| no       | `3000`                         | Simulated implementer duration (Phase 2)   |
+| `SWARM_FIXTURE_DIR`| no       | `fixtures/demo-pr`             | PR fixture copied into sandboxes (agent mode) |
+| `SWARM_SANDBOX_ROOT`| no      | `$TMPDIR/swarm-ci-sandbox`     | Where per-attempt sandboxes are created    |
+| `GROQ_API_KEY`     | yes if provider=groq      | —                              | Primary LLM (Groq Cloud, OpenAI-compatible)|
+| `GROQ_MODEL`       | no       | `openai/gpt-oss-120b`          | Groq chat model id                         |
+| `GOOGLE_API_KEY`   | no       | —                              | Gemini heavy-reasoning **auto-fallback**   |
+| `GOOGLE_MODEL`     | no       | `gemini-3.6-flash`             | Google model id                            |
+| `JINA_API_KEY`     | no       | —                              | Reserved: diff/page fetching (later phase) |
+
+Never commit API keys. Copy `.env.example` → `.env`, fill it in, and load it
+before running (`set -a; source .env; set +a`) — the binary reads plain
+environment variables.
+
+### Agent mode (real merge gate, Phase 3)
+
+With `LLM_PROVIDER=anthropic` + a valid key:
+
+1. the **planner** turns the bug description into a typed JSON plan (`FixPlan`),
+2. the **implementer** copies `fixtures/demo-pr` into a fresh sandbox per attempt,
+   applies the planned whole-file edits, and runs **real `cargo test`**,
+3. the merge gate opens ONLY for reports with provenance `real_cargo_test` —
+   a model claiming success proves nothing.
+
+Without a key, `LLM_PROVIDER=mock` keeps everything offline in dev mode
+(simulated reports allowed; loudly warned at startup).
+
 
 
 The LLM layer is provider-agnostic behind a trait (`LlmProvider::complete`); the supervisor/worker/gate logic never talks to a vendor SDK.

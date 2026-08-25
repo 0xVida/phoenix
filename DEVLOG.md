@@ -1,13 +1,14 @@
 # Swarm CI — Dev Log
 
 ## Current status
-Phase 2 COMPLETE — Axum API + SSE live, end-to-end smoke test passed over HTTP (submit → kill → reassigned → merged); next action: Phase 3 (`LlmProvider` trait + planner/implementer agents in `crates/agents`).
+Phase 3 COMPLETE + LIVE PROVIDERS WIRED — Groq (`openai/gpt-oss-120b`) plans fixes, implementer runs REAL cargo test in per-attempt sandboxes, Google Gemini auto-fallback armed; live HTTP run merged PR-100 on attempt 1 with `origin: RealCargoTest`. Next action: Phase 4 minimal frontend over SSE.
 
 ## Phase progress
 - Phase 0: done
 - Phase 1: done — typed state machine, supervisor lease/reaper/reassignment with attempt-based fencing, killable single-task worker runtime; THE test (`killed_worker_is_reassigned_and_task_completes`) plus the attempts-exhaustion test both pass.
 - Phase 2: done — `POST /tasks`, `GET /tasks(/:id)`, demo-kill endpoint, SSE `/events` muxing real backend events; live HTTP smoke test green.
-- Phase 3: not started
+- Phase 3: done — `LlmProvider` trait (`MockLlmProvider`, `AnthropicProvider` via env), planner→`FixPlan`(typed), implementer applies plan in sandbox and emits `TestReport{origin: RealCargoTest}` from actual cargo runs; api selects agent mode when `LLM_PROVIDER=anthropic` and flips gate to require real provenance.
+- Phase 4: not started
 - Phase 4: not started
 - Phase 5: not started
 
@@ -26,6 +27,15 @@ Phase 2 COMPLETE — Axum API + SSE live, end-to-end smoke test passed over HTTP
 - 2026-08-24 (Phase 2) — SSE frames carry the spec's dotted names on the `event:` line (e.g. `task.created`) with the full serialized `SwarmEvent` as data; lagging subscribers skip missed events rather than blocking the bus.
 - 2026-08-24 (Phase 2) — Until Phase 3, the implementer is a SIMULATED one (`SimulatedImplementer`, reports origin=simulated) and the binary runs the gate in dev mode (`require_real_cargo_test=false`) with a loud warning log. Provenance honesty is preserved everywhere else.
 - 2026-08-24 (Phase 2) — MVP task listing uses an in-process registry (`Arc<Mutex<Vec<TaskId>>>` in AppState); post-hackathon replace with a supervisor query API if persistence matters.
+- 2026-08-24 (Phase 3) — LLM access stays behind ONE trait method (`complete`); vendor specifics live only in `AnthropicProvider` (Messages API via reqwest+rustls; key/model/base-URL from env). No SDK dependency anywhere else.
+- 2026-08-24 (Phase 3) — Planner output is parsed into typed `FixPlan { summary, root_cause, edits:[{path,content}] }`; edits REPLACE whole files. Parser tolerates prose/fences (first `{`..last `}`) and REJECTS absolute paths / `..` components (AgentError::UnsafePath) — the sandbox cannot be escaped by a prompt injection.
+- 2026-08-24 (Phase 3) — Implementer copies the pristine fixture into a FRESH per-attempt sandbox (`/tmp/swarm-ci-sandbox/<task-uuid>`) before applying edits, so a killed worker can never leave a half-applied fix for the next generation; failing sandboxes are cleaned up.
+- 2026-08-24 (Phase 3) — Provenance honesty is structural: `ImplementerAgent::fix` derives pass/fail from the real cargo exit status and ALWAYS stamps `TestOrigin::RealCargoTest`. The api flips `require_real_cargo_test=true` ONLY in agent mode; simulated mode keeps dev gate + loud warning. A "broken plan" integration test proves wrong fixes report failure, never success.
+- 2026-08-24 (Phase 3) — MSRV pin: reqwest's url→idna chain pulled icu 2.x needing rustc 1.88 (we have 1.85). Fixed durably via committed Cargo.lock pin `idna_adapter 1.2.0` (icu 1.x line). Fresh clones inherit it.
+- 2026-08-25 — Real providers wired: `GroqProvider` (OpenAI-compatible chat completions, primary) + `GoogleProvider` (Gemini generateContent, heavy-reasoning backup) + `FallbackProvider` chain; `LLM_PROVIDER=groq|google|anthropic|mock`, and any configured `GOOGLE_API_KEY` auto-arms the fallback behind a non-google primary. Keys live ONLY in gitignored `.env`.
+- 2026-08-25 — Model defaults corrected against live catalogs: Groq's `llama-3.3-70b-versatile` no longer exists → `openai/gpt-oss-120b`; Google retired `gemini-2.0-flash` → `gemini-3.6-flash`. Lesson: model ids rot — treat them as env config, never hardcode.
+- 2026-08-25 — Planner prompt now embeds the sandbox's CURRENT files (`collect_context`) so real models fix actual source instead of guessing; mock flow unaffected.
+- 2026-08-25 — Jina AI key stored in `.env` for later diff/page fetching; no code path uses it yet (deliberately — no speculative features).
 
 ## Open questions / blockers
 - None blocking. rustc/cargo 1.85.0 on box; edition 2021 chosen for dep compatibility.
@@ -33,8 +43,8 @@ Phase 2 COMPLETE — Axum API + SSE live, end-to-end smoke test passed over HTTP
 ## How to resume
 1. `cat DEVLOG.md` (this file), then skim `BUILD_PROMPT.md` for the contract.
 2. `cargo test --workspace` must stay green — especially `crates/supervisor/tests/kill_and_reassign.rs` (THE test lives there).
-3. Next work item (Phase 3): `crates/agents` — `LlmProvider` trait (`complete(&str) -> Result<String, LlmError>`), `MockLlmProvider` for offline dev + `AnthropicProvider` reading `ANTHROPIC_API_KEY`/`ANTHROPIC_BASE_URL` from env; planner produces a TYPED plan (Serde structs); implementer edits a sandbox copy and produces `TestReport { origin: RealCargoTest }` ONLY by actually running `cargo test` there; then flip `require_real_cargo_test=true` in `crates/api/src/main.rs` and replace `DemoSpawner`'s `SimulatedImplementer`.
-4. Phase 3 after that: `LlmProvider` trait in `crates/agents` (mock + Anthropic), typed plan structs, implementer agent producing `TestReport { origin: RealCargoTest }` ONLY by actually running `cargo test` in a sandbox copy; then flip `require_real_cargo_test` to true in production wiring.
+3. Next work item (Phase 4): minimal frontend — a static HTML/JS page that opens `GET /events` SSE and renders human-readable state changes; translate internal events to plain language (e.g. `stale_result.rejected` → "Old agent result rejected — this task had already been reassigned").
+4. Phase 5 after that: rehearse the 2-minute demo (submit → planner → implementer → kill via `POST /tasks/:id/kill` → visible reassign → real cargo test passes → merge gate opens) and drill failure modes (bad API key, network blip, attempts exhaustion).
 
 ## Log
 ### 2026-08-24 — Project bootstrap (Phase 0)
@@ -61,5 +71,23 @@ Phase 2 COMPLETE — Axum API + SSE live, end-to-end smoke test passed over HTTP
 - LIVE SMOKE TEST (real HTTP, real timing): submit PR-7 → status `in_progress`(attempt 1) → POST kill → within ~2 s supervisor observed lease expiry and reassigned → fresh worker finished → final snapshot `"status":"merged","attempt":2`. SSE capture shows exactly: `worker.failed` → `task.reassigned` → `worker.started`(#2) → `tests.passed(simulated)` → `merge.opened`. Events are provably backend truth — they come from the same bus the supervisor alone writes to.
 - Compile fixes along the way: tokio_stream's `filter_map` is sync (no async block); `tracing-subscriber` missing from api deps; hand the supervisor a plain `DemoSpawner` clone instead of `Arc<...>` (trait not implemented for Arc wrapper).
 - Full workspace `cargo test` re-run after ids.rs changes — still green (see /tmp/swarm_p2_test.log).
+
+### 2026-08-24 — Phase 3: agents + REAL merge gate provenance
+- `crates/agents` implemented: `LlmProvider` trait; `MockLlmProvider` (deterministic, offline — answers the planner contract with the known-good fixture fix); `AnthropicProvider` (Messages API via reqwest+rustls, env-driven key/base-url/model).
+- Typed planning: `planner_prompt` contract ("TASK: PLAN" prefix) → model JSON → `FixPlan` via tolerant extractor (first `{`..last `}`) with strict validation (no absolute paths, no `..`, ≥1 edit) — unit-tested against prose-wrapped and malicious outputs.
+- `ImplementerAgent::fix`: fresh sandbox copy of `fixtures/demo-pr` per attempt → apply whole-file edits → **real** `cargo test --quiet` → honest `TestReport { origin: RealCargoTest }`; failing sandboxes removed.
+- Fixture PR: `fixtures/demo-pr` (ledger crate whose `sum` skips the last element; tests fail pre-fix).
+- API wiring: `DemoSpawner` now takes an `ExecutorFactory(&Assignment) -> Box<dyn TaskExecutor>`; new `AgentExecutor` bridges agent→worker port. main selects agent mode when `LLM_PROVIDER=anthropic` and flips `require_real_cargo_test=true`; mock/simulated mode keeps dev gate with loud warning.
+- Tests: plan parsing trio; agent-flow integration pair runs REAL cargo in sandboxes — good fix passes (`RealCargoTest`, passed), deliberately-broken fix reports FAILURE (anti-self-report property proven end to end). Full workspace suite green (`/tmp/swarm_p3_all2.log`, EXIT:0), kill-and-reassign untouched.
+- Dead end hit + fixed: reqwest→url→idna_adapter 1.2.2 needs rustc 1.88 > our 1.85 → pinned `idna_adapter 1.2.0` (icu 1.x) via committed Cargo.lock.
+
+### 2026-08-25 — Live providers (Groq primary, Google fallback) — REAL merge gate demoed
+- Added `GroqProvider` / `GoogleProvider` / `FallbackProvider` + `provider_from_env()`; `.env` (gitignored) holds the user's Groq/Google/Jina keys. Jina intentionally unused for now.
+- First live run FAILED CLOSED beautifully: retired model ids on BOTH providers (`llama-3.3-70b-versatile` gone from Groq; `gemini-2.0-flash` retired on Google) → all 3 attempts crashed → supervisor reassigned twice → terminal `Failed` + single `merge.gated`. Zero silent losses; the failure-mode drill ran itself.
+- Diagnosed via structured logs; queried Groq `/v1/models`; switched to `openai/gpt-oss-120b` + `gemini-3.6-flash`.
+- SECOND live run: **PR-100 merged on attempt 1** — planner produced a valid typed plan, implementer applied it in a fresh sandbox, REAL cargo test passed, `TestsPassed { origin: RealCargoTest }`, `merge.opened`. Gate is now provably tied to genuine test runs in production config.
+- Workspace tests green after all changes (`/tmp/swarm_p3d_all.log`, EXIT:0): 9 agents units (incl. parser + fallback chain), 2 real-cargo agent flows, 10 core, 2 kill-and-reassign.
+
+
 
 

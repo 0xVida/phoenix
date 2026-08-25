@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 swarm-core = { workspace = true }
+swarm-agents = { workspace = true }
 swarm-supervisor = { workspace = true }
 swarm-worker = { workspace = true }
 async-trait = { workspace = true }

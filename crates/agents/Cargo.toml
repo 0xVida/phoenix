@@ -5,5 +5,14 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+swarm-core = { workspace = true }
+async-trait = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
-# Phase 3 adds: serde, serde_json, async-trait, reqwest (or provider SDK-free HTTP), swarm-core
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+async-trait = { workspace = true }

@@ -17,6 +17,7 @@ use async_trait::async_trait;
 use swarm_core::events::TestOrigin;
 use swarm_core::gate::TestReport;
 use swarm_core::ids::{Attempt, TaskId};
+use swarm_core::mail::Assignment;
 use swarm_supervisor::WorkerSpawner;
 use swarm_worker::{run_worker, ExecutorOutcome, TaskExecutor};
 
@@ -42,23 +43,45 @@ impl TaskExecutor for SimulatedImplementer {
     }
 }
 
+/// Bridges swarm_worker's `TaskExecutor` port to the Phase 3 implementer
+/// agent. Agent errors become loud crashes (supervisor treats them like any
+/// worker death — lease/Died handling, reassignment).
+pub struct AgentExecutor {
+    pub agent: Arc<swarm_agents::ImplementerAgent>,
+    pub bug_description: String,
+}
+
+#[async_trait]
+impl TaskExecutor for AgentExecutor {
+    async fn execute(&mut self) -> ExecutorOutcome {
+        match self.agent.fix(&self.bug_description).await {
+            Ok(report) => ExecutorOutcome::Completed(report),
+            Err(e) => ExecutorOutcome::Crashed(format!("implementer agent failed: {e}")),
+        }
+    }
+}
+
 #[derive(Default)]
 struct SpawnerState {
     handle: Option<swarm_core::mail::SupervisorHandle>,
     live: HashMap<(TaskId, Attempt), tokio::task::JoinHandle<()>>,
 }
 
+/// Builds the `TaskExecutor` for one assignment. Receives the assignment so
+/// agent-backed executors can read e.g. `spec.bug_description`.
+pub type ExecutorFactory = Arc<dyn Fn(&Assignment) -> Box<dyn TaskExecutor> + Send + Sync>;
+
 #[derive(Clone)]
 pub struct DemoSpawner {
+    factory: ExecutorFactory,
     state: Arc<Mutex<SpawnerState>>,
-    work_for: Duration,
 }
 
 impl DemoSpawner {
-    pub fn new(work_for: Duration) -> Self {
+    pub fn new(factory: ExecutorFactory) -> Self {
         Self {
+            factory,
             state: Arc::default(),
-            work_for,
         }
     }
 
@@ -96,9 +119,7 @@ impl WorkerSpawner for DemoSpawner {
         state.live.retain(|(t, a), _| {
             !(*t == assignment.task_id && *a < assignment.attempt)
         });
-        let executor = Box::new(SimulatedImplementer {
-            work_for: self.work_for,
-        });
+        let executor = (self.factory)(&assignment);
         let join = tokio::spawn(run_worker(assignment.clone(), supervisor, executor));
         state
             .live
