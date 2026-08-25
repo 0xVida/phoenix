@@ -16,6 +16,7 @@ use swarm_core::ids::TaskId;
 use crate::llm::LlmProvider;
 use crate::plan::{planner_prompt, FixPlan};
 use crate::AgentError;
+use tracing::Instrument;
 
 pub struct ImplementerAgent {
     provider: Arc<dyn LlmProvider>,
@@ -95,6 +96,7 @@ impl ImplementerAgent {
         let raw = self
             .provider
             .complete(&planner_prompt(bug_description, &context))
+            .instrument(tracing::info_span!("planner"))
             .await?;
         let plan = FixPlan::from_llm_text(&raw)?;
 
@@ -102,20 +104,34 @@ impl ImplementerAgent {
         // fix behind for the next generation to trip over.
         let sandbox = self.sandbox_root.join(TaskId::generate().to_string());
         copy_dir(&self.fixture_src, &sandbox)?;
-        for edit in &plan.edits {
-            // Paths were validated at parse time (no absolute / no `..`).
-            let dest = sandbox.join(&edit.path);
-            if let Some(parent) = dest.parent() {
-                std::fs::create_dir_all(parent)?;
+
+        {
+            let _guard = tracing::info_span!("apply_edits").entered();
+            for edit in &plan.edits {
+                // Paths were validated at parse time (no absolute / no `..`).
+                let dest = sandbox.join(&edit.path);
+                if let Some(parent) = dest.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(&dest, &edit.content)?;
             }
-            std::fs::write(&dest, &edit.content)?;
         }
 
-        // THE ONLY source of truth for pass/fail: a real cargo test run.
+        // THE ONLY source of truth for pass/fail: a real cargo test run,
+        // timed and traced as its own span under the worker.
+        let test_span = tracing::info_span!("cargo_test");
+        let _test_guard = test_span.enter();
+        let started_at = std::time::Instant::now();
         let output = Command::new("cargo")
             .args(["test", "--quiet"])
             .current_dir(&sandbox)
             .output()?;
+        tracing::info!(
+            duration_ms = started_at.elapsed().as_millis() as u64,
+            passed = output.status.success(),
+            "cargo test finished"
+        );
+
         let passed = output.status.success();
         let summary = summarize(&output);
 

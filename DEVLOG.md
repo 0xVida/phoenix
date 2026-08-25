@@ -1,7 +1,7 @@
 # Swarm CI — Dev Log
 
 ## Current status
-Phase 5 COMPLETE — SUBMISSION READY. Rehearsal script ran the full kill→recover→merge demo twice back-to-back with real Groq planning; provider-outage drill proved fail-closed (gate never opened). All Definition-of-Done boxes demonstrably met. Remaining optional polish: none blocking.
+Phase 5 COMPLETE — SUBMISSION READY, plus post-Done hardening: hierarchical tracing spans (spec §4 fully honored: per-task/per-message/per-worker with planner·apply_edits·cargo_test children) and 3 in-process HTTP contract tests guarding the API. Total 26 workspace tests green. Remaining optional polish: none blocking.
 
 ## Phase progress
 - Phase 0: done
@@ -40,6 +40,8 @@ Phase 5 COMPLETE — SUBMISSION READY. Rehearsal script ran the full kill→reco
 - 2026-08-25 (Phase 5) — Demo repeatability: `scripts/rehearse.sh [runs] [kill_after_s]` and `scripts/failure_drill.sh` committed so rehearsal/me drills are one command each, not tribal memory.
 - 2026-08-25 (Phase 5) — `SWARM_PLAN_DELAY_MS` demo knob (default 0): with fast Groq responses the whole fix finished <2 s, racing the presenter's kill; the knob pauses pre-planning to widen the mid-flight window. Async sleep only — heartbeats keep flowing during the pause. Unset in tests/production.
 - 2026-08-25 (Phase 5) — Failure-drill semantics locked: provider outage ⇒ attempts exhaust ⇒ task `Failed`, exactly ONE `merge.gated`, ZERO `merge.opened`. Asserted by script, proven by drill.
+- 2026-08-25 (hardening) — Spec §4 spans completed: rootless `worker` span created in the api spawner bridge (`Instrument` on the run_worker future) so planner/apply_edits/cargo_test nest beneath it with task/worker/attempt fields; supervisor wraps every inbound message in a `supervisor_msg{kind,task_id,worker_id,attempt}` span (sync enter() only — no guard across await). Console fmt shows the hierarchy as event prefixes; OTel export deliberately deferred (spec: only if spare time at the very end).
+- 2026-08-25 (hardening) — Added `crates/api/tests/http_smoke.rs`: router exercised directly via `tower::ServiceExt::oneshot` (hermetic, no sockets). Covers dashboard-at-`/`, submit→snapshot→list shapes, plain-language 400/404 translation, kill-on-unknown → NOT_FOUND. SSE streaming intentionally excluded (covered by live smokes). Gotcha recorded: axum Router is consumed by oneshot — clone per request; `&format!` URIs need `&str` params, not `&'static str`.
 
 ## Open questions / blockers
 - None blocking. rustc/cargo 1.85.0 on box; edition 2021 chosen for dep compatibility.
@@ -103,6 +105,11 @@ Phase 5 COMPLETE — SUBMISSION READY. Rehearsal script ran the full kill→reco
 - `scripts/failure_drill.sh` (both provider keys invalidated): attempts exhausted → task `failed`, exactly one `merge.gated`, ZERO `merge.opened`. **PASS — fail-closed proven under total provider outage.**
 - Fixed along the way: swarm-agents needed tokio as a real dep for async sleep; shell typo in drill summary; scripts no longer swallow build errors.
 - DEFINITION OF DONE: all five boxes met (reliable Phase-1 test; live real-kill demo with visible recovery; gate provably tied to RealCargoTest; stranger-ready DEVLOG; ≥2 end-to-end rehearsals).
+
+### 2026-08-25 — Post-Done hardening: spans + API contract tests
+- §4 observability finished: `worker` rootless span (api spawner bridge) parents every worker-generation log and its `planner` / `apply_edits` / `cargo_test` child spans (cargo now timed with duration_ms + passed fields); supervisor loop wraps each inbound message in `supervisor_msg{kind,task_id,worker_id,attempt}`. Verified live: console lines render as `supervisor_msg{kind="heartbeat" task_id=… attempt=1}: swarm_event …`.
+- New hermetic API tests (`crates/api/tests/http_smoke.rs`, tower oneshot): dashboard served, submit→snapshot→list contract, plain-language 400/404s, kill-unknown → 404. Workspace total now **26 tests, all green**.
+
 
 
 

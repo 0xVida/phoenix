@@ -14,6 +14,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use tracing::Instrument;
+
 use swarm_core::events::TestOrigin;
 use swarm_core::gate::TestReport;
 use swarm_core::ids::{Attempt, TaskId};
@@ -120,7 +122,20 @@ impl WorkerSpawner for DemoSpawner {
             !(*t == assignment.task_id && *a < assignment.attempt)
         });
         let executor = (self.factory)(&assignment);
-        let join = tokio::spawn(run_worker(assignment.clone(), supervisor, executor));
+        // Rootless per-worker span: every log line from this worker generation
+        // (and its planner / cargo_test children) carries task/worker/attempt
+        // fields — spec §4's "one span per task" story.
+        let span = tracing::info_span!(
+            parent: None,
+            "worker",
+            task_id = %assignment.task_id,
+            worker_id = %assignment.worker_id,
+            attempt = assignment.attempt,
+        );
+        let join = tokio::spawn(
+            run_worker(assignment.clone(), supervisor, executor).instrument(span),
+        );
+
         state
             .live
             .insert((assignment.task_id, assignment.attempt), join);

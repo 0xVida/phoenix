@@ -1033,6 +1033,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
+ "http-body-util",
  "serde",
  "serde_json",
  "swarm-agents",
@@ -1041,6 +1042,7 @@ dependencies = [
  "swarm-worker",
  "tokio",
  "tokio-stream",
+ "tower",
  "tracing",
  "tracing-subscriber",
 ]

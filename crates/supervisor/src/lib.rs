@@ -187,7 +187,20 @@ impl Supervisor {
             tokio::select! {
                 msg = rx.recv() => {
                     match msg {
-                        Some(m) => self.on_msg(m),
+                        Some(m) => {
+                            // Spec §4: one span per task — every message the
+                            // supervisor processes is traced with ids attached.
+                            let (kind, task_id, worker_id, attempt) = msg_meta(&m);
+                            let _guard = tracing::info_span!(
+                                "supervisor_msg",
+                                kind,
+                                task_id = %task_id,
+                                worker_id = %worker_id,
+                                attempt = attempt,
+                            )
+                            .entered();
+                            self.on_msg(m);
+                        }
                         None => return Err(SwarmError::ChannelClosed),
                     }
                 }
@@ -372,6 +385,25 @@ impl Supervisor {
                 reason: reason.clone(),
             });
             self.retry_or_fail(task_id, &reason);
+        }
+    }
+}
+
+/// Spec §4 span helper: pull the ids off any worker message so the supervisor
+/// loop can attach them to a per-message tracing span.
+fn msg_meta(msg: &WorkerMsg) -> (&'static str, TaskId, WorkerId, Attempt) {
+    match msg {
+        WorkerMsg::Started { task_id, worker_id, attempt } => {
+            ("started", *task_id, *worker_id, *attempt)
+        }
+        WorkerMsg::Heartbeat { task_id, worker_id, attempt } => {
+            ("heartbeat", *task_id, *worker_id, *attempt)
+        }
+        WorkerMsg::Finished { task_id, worker_id, attempt, .. } => {
+            ("finished", *task_id, *worker_id, *attempt)
+        }
+        WorkerMsg::Died { task_id, worker_id, attempt, .. } => {
+            ("died", *task_id, *worker_id, *attempt)
         }
     }
 }
