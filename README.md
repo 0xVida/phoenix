@@ -28,9 +28,12 @@ crates/
 cargo build                              # workspace build
 cargo test                               # 10 unit + 2 integration tests (kill-and-reassign lives in swarm-supervisor)
 
-# Run the API + dashboard:
-RUST_LOG=info cargo run -p swarm-api
+# One command: auto-loads .env, pre-flights keys/port, runs dashboard + API
+./scripts/swarm.sh              # add --mock for offline mode, --release for optimized
 # then open http://localhost:3000 — submit a PR, watch the event feed, hit ⚡ KILL mid-flight
+
+# Manual alternative (plain env vars):
+# set -a; source .env; set +a && RUST_LOG=info cargo run -p swarm-api
 ```
 
 Then exercise the self-healing flow live:

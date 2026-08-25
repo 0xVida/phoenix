@@ -42,6 +42,7 @@ Phase 5 COMPLETE — SUBMISSION READY, plus post-Done hardening: hierarchical tr
 - 2026-08-25 (Phase 5) — Failure-drill semantics locked: provider outage ⇒ attempts exhaust ⇒ task `Failed`, exactly ONE `merge.gated`, ZERO `merge.opened`. Asserted by script, proven by drill.
 - 2026-08-25 (hardening) — Spec §4 spans completed: rootless `worker` span created in the api spawner bridge (`Instrument` on the run_worker future) so planner/apply_edits/cargo_test nest beneath it with task/worker/attempt fields; supervisor wraps every inbound message in a `supervisor_msg{kind,task_id,worker_id,attempt}` span (sync enter() only — no guard across await). Console fmt shows the hierarchy as event prefixes; OTel export deliberately deferred (spec: only if spare time at the very end).
 - 2026-08-25 (hardening) — Added `crates/api/tests/http_smoke.rs`: router exercised directly via `tower::ServiceExt::oneshot` (hermetic, no sockets). Covers dashboard-at-`/`, submit→snapshot→list shapes, plain-language 400/404 translation, kill-on-unknown → NOT_FOUND. SSE streaming intentionally excluded (covered by live smokes). Gotcha recorded: axum Router is consumed by oneshot — clone per request; `&format!` URIs need `&str` params, not `&'static str`.
+- 2026-08-25 (ergonomics) — Blessed launcher is `scripts/swarm.sh`, NOT a `dotenvy` dep inside main.rs: keeps the binary's contract as plain env vars (spec §3), avoids an extra crate, and gives us free real estate for pre-flight UX (provider key check before compiling, port-busy hint with exact recovery command, provider/model banner). `.env` fills gaps but never overrides already-exported vars; `--mock` forces offline regardless of `.env`.
 
 ## Open questions / blockers
 - None blocking. rustc/cargo 1.85.0 on box; edition 2021 chosen for dep compatibility.
@@ -109,6 +110,11 @@ Phase 5 COMPLETE — SUBMISSION READY, plus post-Done hardening: hierarchical tr
 ### 2026-08-25 — Post-Done hardening: spans + API contract tests
 - §4 observability finished: `worker` rootless span (api spawner bridge) parents every worker-generation log and its `planner` / `apply_edits` / `cargo_test` child spans (cargo now timed with duration_ms + passed fields); supervisor loop wraps each inbound message in `supervisor_msg{kind,task_id,worker_id,attempt}`. Verified live: console lines render as `supervisor_msg{kind="heartbeat" task_id=… attempt=1}: swarm_event …`.
 - New hermetic API tests (`crates/api/tests/http_smoke.rs`, tower oneshot): dashboard served, submit→snapshot→list contract, plain-language 400/404s, kill-unknown → 404. Workspace total now **26 tests, all green**.
+
+### 2026-08-25 — One-command launcher: `scripts/swarm.sh`
+- Auto-loads repo-root `.env` (without overriding exported vars), pre-flights provider keys (fails fast with plain-language message BEFORE compiling) and the port (busy → exact `pkill` hint), prints provider/model banner, then `exec`s `cargo run -p swarm-api` in the foreground. Flags: `--mock` (force offline), `--release`.
+- Verified all paths live: help text; groq-without-any-key exits 1 with "GROQ_API_KEY is not set"; `--mock` serves `{"tasks":[]}` on :3000; second concurrent launch exits 1 with port-busy hint.
+
 
 
 
