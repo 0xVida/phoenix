@@ -60,6 +60,11 @@ impl ImplementerAgent {
         // 1. Materialize the working copy OFF the async thread — a slow git
         // clone here must not starve this worker's heartbeat timer.
         let sandbox = self.sandbox_root.join(TaskId::generate().to_string());
+        // Remember the git origin so a passing fix can be pushed back later.
+        let git_origin: Option<(String, String)> = match workspace::resolve(spec) {
+            Some(workspace::SandboxSource::Git { url, fetch_ref }) => Some((url, fetch_ref)),
+            _ => None,
+        };
         {
             let source = workspace::resolve(spec);
             let fixture = self.fixture_src.clone();
@@ -148,6 +153,30 @@ impl ImplementerAgent {
 
 
         let passed = output.status.success();
+        // Push the PROVEN fix back before reporting, so merge.opened always
+        // means the PR's head branch already carries the verified code.
+        if passed {
+            if let Some((url, fetch_ref)) = &git_origin {
+                if let Some(branch) = workspace::resolve_push_branch(url, fetch_ref) {
+                    let msg = format!(
+                        "Phoenix CI: {}\n\nApplied in an isolated sandbox and verified by a real `cargo test` run.",
+                        spec.title
+                    );
+                    let dest = sandbox.clone();
+                    let url2 = url.clone();
+                    let branch2 = branch.clone();
+                    let m2 = msg;
+                    tokio::task::spawn_blocking(move || {
+                        workspace::publish_fix(&dest, &url2, &branch2, &m2)
+                    })
+                    .await
+                    .map_err(|e| AgentError::Git(format!("publish join error: {e}")))??;
+                    tracing::info!(branch = %branch, "proven fix pushed to PR head branch");
+                } else {
+                    tracing::warn!("no head branch resolved; verified fix stays local to the sandbox");
+                }
+            }
+        }
         let summary = summarize(&output);
 
         // Keep passing sandboxes around for demo inspection; clean up failures.

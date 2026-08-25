@@ -113,6 +113,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tasks: Arc::default(),
         spawner,
     };
+
+    // GitHub publisher: best-effort automerges real PRs when their gates open.
+    let pub_sup = state.supervisor.clone();
+    let pub_state = state.clone();
+    tokio::spawn(async move {
+        swarm_api::publisher::run(pub_sup, pub_state.tasks).await;
+    });
+
     let app = swarm_api::router(state);
 
     let addr = std::env::var("SWARM_BIND").unwrap_or_else(|_| "0.0.0.0:3000".into());

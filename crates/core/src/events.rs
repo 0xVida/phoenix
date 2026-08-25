@@ -63,6 +63,21 @@ pub enum SwarmEvent {
     MergeOpened {
         task_id: TaskId,
     },
+    /// The verified fix was published to the PR's head branch on GitHub.
+    GithubPushOk {
+        task_id: TaskId,
+        branch: String,
+    },
+    /// The GitHub pull request was merged (post-gate automation).
+    GithubPrMerged {
+        task_id: TaskId,
+        url: String,
+    },
+    /// A post-gate GitHub automation step failed (best-effort by design).
+    GithubActionFailed {
+        task_id: TaskId,
+        reason: String,
+    },
 }
 
 /// Fan-out bus over `tokio::sync::broadcast`. Emitting with zero subscribers

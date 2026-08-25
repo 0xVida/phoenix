@@ -15,5 +15,6 @@
 pub mod routes;
 pub mod spawner;
 pub mod state;
+pub mod publisher;
 
 pub use routes::router;

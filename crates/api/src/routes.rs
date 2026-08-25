@@ -96,14 +96,14 @@ async fn index() -> axum::response::Html<&'static str> {
 
 
 async fn submit_task(State(st): State<AppState>, Json(spec): Json<TaskSpec>) -> Json<serde_json::Value> {
-    let id = st.supervisor.submit_pr(spec);
-    st.tasks.lock().unwrap().push(id);
+    let id = st.supervisor.submit_pr(spec.clone());
+    st.tasks.lock().unwrap().insert(id, spec);
     tracing::info!(task_id=%id, "task submitted via API");
     Json(serde_json::json!({ "task_id": id.to_string() }))
 }
 
 async fn list_tasks(State(st): State<AppState>) -> Json<serde_json::Value> {
-    let ids = st.tasks.lock().unwrap().clone();
+    let ids: Vec<_> = st.tasks.lock().unwrap().keys().copied().collect();
     let tasks = ids
         .into_iter()
         .filter_map(|id| {
@@ -186,6 +186,9 @@ fn event_name(ev: &SwarmEvent) -> &'static str {
         SwarmEvent::TestsFailed { .. } => "tests.failed",
         SwarmEvent::MergeGated { .. } => "merge.gated",
         SwarmEvent::MergeOpened { .. } => "merge.opened",
+        SwarmEvent::GithubPushOk { .. } => "github.push_ok",
+        SwarmEvent::GithubPrMerged { .. } => "github.pr_merged",
+        SwarmEvent::GithubActionFailed { .. } => "github.action_failed",
     }
 }
 

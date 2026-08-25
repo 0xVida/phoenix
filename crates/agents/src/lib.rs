@@ -17,7 +17,9 @@ pub use llm::{
     LlmError, LlmProvider, MockLlmProvider,
 };
 pub use plan::{planner_prompt, FixPlan, PlannedEdit};
-pub use workspace::{parse_github_pr, SandboxSource};
+pub use workspace::{
+    filesystem_repo, parse_github_pr, publish_fix, resolve_push_branch, SandboxSource,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {

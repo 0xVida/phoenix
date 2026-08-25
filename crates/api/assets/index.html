@@ -164,6 +164,12 @@ function humanize(name, d) {
       return `⛔ merge gate BLOCKED — ${d.reason}`;
     case 'merge.opened':
       return '🎉 merge gate OPENED — the PR is safe to merge';
+    case 'github.push_ok':
+      return `⬆️ proven fix pushed to branch ${d.branch}`;
+    case 'github.pr_merged':
+      return `🐙 merged on GitHub → ${d.url}`;
+    case 'github.action_failed':
+      return `⚠️ GitHub automation failed — ${d.reason}`;
     default:
       return name;
   }
@@ -208,6 +214,12 @@ function onEvent(name, data) {
       setStatus('MERGED 🎉', 'ok');
       $('killBtn').disabled = true;
       $('submitBtn').disabled = false; // reset: ready for the next PR
+      break;
+    case 'github.pr_merged':
+      setStatus('MERGED ON GITHUB 🐙', 'ok');
+      break;
+    case 'github.action_failed':
+      addFeed(`⚠️ couldn't merge on GitHub — ${data.reason}`);
       break;
     case 'merge.gated':
       setStatus('BLOCKED ⛔', 'bad');
@@ -327,7 +339,8 @@ const es = new EventSource('/events');
 es.onopen = () => addFeed('🔌 connected to backend event stream');
 es.onerror = () => { /* EventSource retries automatically */ };
 ['task.created','worker.started','worker.heartbeat','worker.failed','task.reassigned',
- 'stale_result.rejected','tests.passed','tests.failed','merge.gated','merge.opened']
+ 'stale_result.rejected','tests.passed','tests.failed','merge.gated','merge.opened',
+ 'github.push_ok','github.pr_merged','github.action_failed']
   .forEach((name) => es.addEventListener(name, (e) => {
     try { onEvent(name, JSON.parse(e.data)); } catch (_) {}
   }));

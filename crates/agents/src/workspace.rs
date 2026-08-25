@@ -59,6 +59,82 @@ pub fn parse_github_pr(url: &str) -> Option<(String, u32)> {
     Some((repo, number))
 }
 
+/// Map a clone origin (url + fetch_ref) back to the branch name the fix must
+/// be pushed to. Pull-request fetch refs (`refs/pull/N/head`) are resolved to
+/// their head branch via `gh`; plain branch/tag refs resolve by name.
+pub fn resolve_push_branch(url: &str, fetch_ref: &str) -> Option<String> {
+    if let Some(n) = fetch_ref
+        .strip_prefix("refs/pull/")
+        .and_then(|s| s.strip_suffix("/head"))
+    {
+        let repo = filesystem_repo(url);
+        let out = Command::new("gh")
+            .args(["pr", "view", n, "--repo", &repo, "--json", "headRefName"])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+        return v["headRefName"].as_str().map(String::from);
+    }
+    if let Some(b) = fetch_ref.strip_prefix("refs/heads/") {
+        return Some(b.to_string());
+    }
+    if !fetch_ref.starts_with("refs/") {
+        return Some(fetch_ref.to_string());
+    }
+    None
+}
+
+pub fn filesystem_repo(url: &str) -> String {
+    url.trim_end_matches(".git")
+        .trim_start_matches("https://github.com/")
+        .trim_start_matches("git@github.com:")
+        .replace(':', "/")
+}
+
+/// Commit any fix present in the sandbox and push it to the PR's head branch.
+/// The caller has ALREADY proven it with a real test run. Uses a bot identity
+/// and never prompts on the terminal (`GIT_TERMINAL_PROMPT=0`).
+pub fn publish_fix(
+    dest: &Path,
+    url: &str,
+    branch: &str,
+    commit_msg: &str,
+) -> Result<(), AgentError> {
+    // Nothing to do if the fix didn't change anything.
+    let status = Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(dest)
+        .output()?;
+    if String::from_utf8_lossy(&status.stdout).trim().is_empty() {
+        return Ok(());
+    }
+    run(dest, &["add", "-A"])?;
+    run(dest, &[
+        "-c", "user.name=Phoenix CI",
+        "-c", "user.email=phoenix-ci@localhost",
+        "commit",
+        "-q",
+        "-m", commit_msg,
+    ])?;
+    let refspec = format!("HEAD:refs/heads/{branch}");
+    let push = Command::new("git")
+        .args(["push", url, &refspec])
+        .current_dir(dest)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()?;
+    if push.status.success() {
+        Ok(())
+    } else {
+        Err(AgentError::Git(format!(
+            "push to {branch} failed: {}",
+            String::from_utf8_lossy(&push.stderr).trim()
+        )))
+    }
+}
+
 /// Materialize the source into a fresh directory at `dest`.
 pub fn prepare(source: Option<&SandboxSource>, fixture: &Path, dest: &Path) -> Result<(), AgentError> {
     match source {

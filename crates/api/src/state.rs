@@ -1,18 +1,23 @@
 //! Shared handler state.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use swarm_core::ids::TaskId;
+use swarm_core::task::TaskSpec;
 use swarm_supervisor::Supervisor;
 
 use crate::spawner::DemoSpawner;
 
+/// Submitted tasks: id → the exact spec they were submitted with. The
+/// publisher reads this to find the `pr_url` behind a `merge.opened`.
+pub type TaskRegistry = Arc<Mutex<HashMap<TaskId, TaskSpec>>>;
+
 #[derive(Clone)]
 pub struct AppState {
     pub supervisor: Supervisor,
-    /// Registry of submitted task ids (MVP listing; a query API on the
-    /// supervisor can replace this post-hackathon).
-    pub tasks: Arc<Mutex<Vec<TaskId>>>,
+    pub tasks: TaskRegistry,
     /// Demo fault-injection registry (join handles per worker generation).
     pub spawner: Arc<DemoSpawner>,
 }
+
