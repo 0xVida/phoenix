@@ -9,6 +9,7 @@
 pub mod implementer;
 pub mod llm;
 pub mod plan;
+pub mod workspace;
 
 pub use implementer::ImplementerAgent;
 pub use llm::{
@@ -16,6 +17,7 @@ pub use llm::{
     LlmError, LlmProvider, MockLlmProvider,
 };
 pub use plan::{planner_prompt, FixPlan, PlannedEdit};
+pub use workspace::{parse_github_pr, SandboxSource};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
@@ -30,4 +32,8 @@ pub enum AgentError {
 
     #[error("unsafe path in plan edit: {0}")]
     UnsafePath(String),
+
+    #[error("git operation failed: {0}")]
+    Git(String),
+
 }

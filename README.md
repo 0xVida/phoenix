@@ -81,18 +81,39 @@ Never commit API keys. Copy `.env.example` → `.env`, fill it in, and load it
 before running (`set -a; source .env; set +a`) — the binary reads plain
 environment variables.
 
-### Agent mode (real merge gate, Phase 3)
+## Solving real pull requests
 
-With `LLM_PROVIDER=anthropic` + a valid key:
+Point Swarm CI at any PR link — it clones that exact head (`refs/pull/N/head`),
+the planner reads the real code, and only a genuine `cargo test` pass opens the
+gate:
 
-1. the **planner** turns the bug description into a typed JSON plan (`FixPlan`),
-2. the **implementer** copies `fixtures/demo-pr` into a fresh sandbox per attempt,
-   applies the planned whole-file edits, and runs **real `cargo test`**,
-3. the merge gate opens ONLY for reports with provenance `real_cargo_test` —
-   a model claiming success proves nothing.
+```jsonc
+// POST /tasks  (or paste the link into the dashboard's "PR link" field)
+{
+  "pr_id": "102",
+  "title": "FX conversion loses cents",
+  "bug_description": "convert() must apply rate_bps once and preserve cents.",
+  "pr_url": "https://github.com/<owner>/<repo>/pull/102"
+}
+```
 
-Without a key, `LLM_PROVIDER=mock` keeps everything offline in dev mode
-(simulated reports allowed; loudly warned at startup).
+Also accepted: `"repo_url"` (any git URL incl. local paths) plus optional
+`"git_ref"` (branch/tag/full ref) instead of `pr_url`. The bundled demo target
+lives at `github.com/Ay-obami/swarm-demo-target` — three seeded bug PRs
+(discount-cap, FX rounding, oversell boundary), each taking ~10–20 s end-to-end
+(real planning + cold `cargo test`). Use `SWARM_PLAN_DELAY_MS` if you want an
+even wider live-kill window.
+
+### Agent mode vs dev mode
+
+With a real provider configured (`LLM_PROVIDER=groq|google|anthropic`), the
+planner produces a typed JSON plan, the implementer clones the PR head into a
+fresh per-attempt sandbox and runs **real `cargo test`**, and the gate opens
+ONLY for reports with provenance `real_cargo_test`. With `LLM_PROVIDER=mock`
+(no keys needed) everything stays offline: simulated implementers and a
+dev-mode gate that loudly warns it accepts simulated reports.
+
+
 
 
 

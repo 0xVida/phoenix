@@ -21,22 +21,68 @@ pub struct PlannedEdit {
 }
 
 impl FixPlan {
-    /// Extract the JSON object even when the model wraps it in prose or code
-    /// fences: take the first `{` to the last `}` and parse strictly.
+    /// Extract a JSON object from model output that may wrap it in prose or
+    /// code fences — and may leave trailing chatter after it. Strategy:
+    ///   1. whole-text direct parse (fast path),
+    ///   2. fenced blocks (```json … ```),
+    ///   3. quote-aware balanced-brace scan: try every complete `{…}` object,
+    ///      first one that parses wins.
     pub fn from_llm_text(text: &str) -> Result<Self, AgentError> {
-        let start = text
-            .find('{')
-            .ok_or_else(|| AgentError::PlanParse("no JSON object found in model output".into()))?;
-        let end = text.rfind('}').ok_or_else(|| {
-            AgentError::PlanParse("no closing brace found in model output".into())
-        })?;
-        if end <= start {
-            return Err(AgentError::PlanParse(
-                "malformed JSON object in model output".into(),
-            ));
+        if let Ok(plan) = serde_json::from_str::<FixPlan>(text.trim()) {
+            return Self::finalize(plan);
         }
-        let plan: FixPlan = serde_json::from_str(text[start..=end].trim())
-            .map_err(|e| AgentError::PlanParse(format!("invalid plan JSON: {e}")))?;
+        for fence in ["```json", "```JSON", "```"] {
+            if let Some(start) = text.find(fence) {
+                let rest = &text[start + fence.len()..];
+                if let Some(end_rel) = rest.find("```") {
+                    if let Ok(plan) =
+                        serde_json::from_str::<FixPlan>(rest[..end_rel].trim())
+                    {
+                        return Self::finalize(plan);
+                    }
+                }
+            }
+        }
+
+        let chars: Vec<char> = text.chars().collect();
+        let mut stack: Vec<usize> = Vec::new();
+        let mut in_string = false;
+        let mut escaped = false;
+        for (i, &c) in chars.iter().enumerate() {
+            if in_string {
+                if escaped {
+                    escaped = false;
+                } else if c == '\\' {
+                    escaped = true;
+                } else if c == '"' {
+                    in_string = false;
+                }
+                continue;
+            }
+            match c {
+                '"' => in_string = true,
+                '{' => stack.push(i),
+                '}' => {
+                    if let Some(start) = stack.pop() {
+                        if stack.is_empty() && start < i {
+                            let candidate: String = chars[start..=i].iter().collect();
+                            if let Ok(plan) =
+                                serde_json::from_str::<FixPlan>(&candidate)
+                            {
+                                return Self::finalize(plan);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        Err(AgentError::PlanParse(
+            "no valid JSON object found in model output".into(),
+        ))
+    }
+
+    fn finalize(plan: FixPlan) -> Result<Self, AgentError> {
         if plan.edits.is_empty() {
             return Err(AgentError::PlanParse("plan contained no edits".into()));
         }

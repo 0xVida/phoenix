@@ -9,12 +9,25 @@ use async_trait::async_trait;
 use swarm_agents::{ImplementerAgent, LlmError, LlmProvider, MockLlmProvider};
 use swarm_core::events::TestOrigin;
 use swarm_core::ids::TaskId;
+use swarm_core::task::TaskSpec;
 
 const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/demo-pr");
 
 fn unique_sandbox(tag: &str) -> PathBuf {
     std::env::temp_dir().join(format!("swarm-agents-{tag}-{}", TaskId::generate()))
 }
+
+fn spec(bug: &str) -> TaskSpec {
+    TaskSpec {
+        pr_id: "T".into(),
+        title: "t".into(),
+        bug_description: bug.into(),
+        pr_url: None,
+        repo_url: None,
+        git_ref: None,
+    }
+}
+
 
 #[tokio::test]
 async fn mock_plan_then_real_cargo_test_makes_fixture_pass() {
@@ -25,7 +38,9 @@ async fn mock_plan_then_real_cargo_test_makes_fixture_pass() {
         sandbox.clone(),
     );
     let report = agent
-        .fix("sum(&[1,2,3]) returns 3 — it skips the final element")
+        .fix(&spec(
+            "sum(&[1,2,3]) returns 3 — it skips the final element",
+        ))
         .await
         .expect("agent flow completes");
 
@@ -61,7 +76,7 @@ async fn failing_real_tests_report_failure_not_success() {
         sandbox.clone(),
     );
     let report = agent
-        .fix("deliberately broken plan — tests must fail")
+        .fix(&spec("deliberately broken plan — tests must fail"))
         .await
         .expect("flow still completes when tests fail");
 

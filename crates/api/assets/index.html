@@ -71,14 +71,18 @@
 
   <div class="card">
     <h2>1 · Submit a pull request</h2>
+    <label>PR link (optional — GitHub PR or any git URL)</label>
+    <input id="prUrl" placeholder="https://github.com/<owner>/swarm-demo-target/pull/102">
     <div class="row">
-      <div style="flex:1;min-width:180px">
-        <label>PR id</label><input id="prId" value="PR-101">
+      <div style="flex:1;min-width:200px">
+        <label>Explicit ref (optional — branch / refs/pull/N/head)</label>
+        <input id="gitRef" placeholder="refs/pull/103/head">
       </div>
       <div style="flex:2;min-width:220px">
         <label>Title</label><input id="prTitle" value="Ledger sum drops last element">
       </div>
     </div>
+
     <label>Bug description (what the planner reads)</label>
     <textarea id="prBug">ledger::sum(&amp;[1,2,3]) returns 3 but must return 6 — the function skips the final element of the slice.</textarea>
     <button id="submitBtn" onclick="submitTask()">Submit PR → planner + implementer</button>
@@ -207,12 +211,18 @@ function onEvent(name, data) {
 }
 
 async function submitTask() {
+  const prLink = $('prUrl').value.trim();
+  const gitRef = $('gitRef').value.trim();
+  const pullNum = (prLink.match(/\/pull\/(\d+)/) || [])[1];
   const body = {
-    pr_id: $('prId').value.trim() || 'PR-' + Date.now(),
+    pr_id: pullNum ? 'PR-' + pullNum : ('PR-' + Date.now()),
     title: $('prTitle').value.trim(),
     bug_description: $('prBug').value.trim(),
   };
   if (!body.bug_description) { alert('Describe the bug first.'); return; }
+  if (prLink) body.pr_url = prLink;
+  if (gitRef) body.git_ref = gitRef;
+
   $('submitBtn').disabled = true; $('killBtn').disabled = false;
   $('feed').innerHTML = ''; heartbeats = 0; $('hbCount').textContent = '0';
 
@@ -223,9 +233,11 @@ async function submitTask() {
   });
   const json = await res.json();
   currentTask = json.task_id;
-  $('taskIdLine').textContent = 'task ' + currentTask;
+  $('taskIdLine').textContent = 'task ' + currentTask +
+    (prLink ? `  ·  ${prLink}` : '');
   setStatus('submitted…');
 }
+
 
 async function killTask() {
   if (!currentTask) return;

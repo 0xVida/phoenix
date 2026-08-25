@@ -1,9 +1,8 @@
-//! The implementer agent: plan → sandbox edits → REAL `cargo test`.
+//! The implementer agent: sandbox prep → plan → edits → REAL `cargo test`.
 //!
-//! Provenance honesty lives HERE: the returned [`TestReport`] always carries
-//! `TestOrigin::RealCargoTest` because we genuinely execute cargo inside the
-//! sandbox; pass/fail comes from the process exit status — never from any
-//! model claim. This is what the deterministic merge gate keys off.
+//! Provenance honesty lives HERE: pass/fail comes from the process exit
+//! status of a genuine cargo run inside the sandbox — never from any model
+//! claim. This is what the deterministic merge gate keys off.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -12,15 +11,17 @@ use std::sync::Arc;
 use swarm_core::events::TestOrigin;
 use swarm_core::gate::TestReport;
 use swarm_core::ids::TaskId;
+use swarm_core::task::TaskSpec;
+use tracing::Instrument;
 
 use crate::llm::LlmProvider;
 use crate::plan::{planner_prompt, FixPlan};
+use crate::workspace;
 use crate::AgentError;
-use tracing::Instrument;
 
 pub struct ImplementerAgent {
     provider: Arc<dyn LlmProvider>,
-    /// The pristine "PR under review" working copy (e.g. fixtures/demo-pr).
+    /// Legacy/dev fallback source copied when the task has no git origin.
     fixture_src: PathBuf,
     /// Parent directory for per-attempt sandbox copies.
     sandbox_root: PathBuf,
@@ -39,14 +40,10 @@ impl ImplementerAgent {
         }
     }
 
-    /// One attempt's full flow. MVP note: fs + subprocess calls are
-    /// synchronous inside this async fn; they are short (tiny fixture crate)
-    /// and each worker runs on its own task, so blocking here does not stall
-    /// other tasks on multi-thread runtimes.
-    pub async fn fix(&self, bug_description: &str) -> Result<TestReport, AgentError> {
-        // Demo affordance (Phase 5): optionally widen the mid-flight window so
-        // a presenter can hit ⚡KILL while the planner is thinking.
-        // Read once per process; unset => zero delay.
+    /// One attempt's full flow for one task spec. FS/subprocess calls are
+    /// synchronous here — short, and workers own their task.
+    pub async fn fix(&self, spec: &TaskSpec) -> Result<TestReport, AgentError> {
+        // Demo knob: widen the mid-flight window for live KILLs.
         static PLAN_DELAY: std::sync::OnceLock<std::time::Duration> = std::sync::OnceLock::new();
         let delay = *PLAN_DELAY.get_or_init(|| {
             std::time::Duration::from_millis(
@@ -60,51 +57,33 @@ impl ImplementerAgent {
             tokio::time::sleep(delay).await;
         }
 
-        // Gather the sandbox's current source so the planner fixes real code.
-        // Nested fn keeps this single-purpose and side-effect free.
-        fn collect_context(root: &Path) -> std::io::Result<Vec<(String, String)>> {
-            fn walk(
-                dir: &Path,
-                base: &Path,
-                out: &mut Vec<(String, String)>,
-            ) -> std::io::Result<()> {
-                for entry in std::fs::read_dir(dir)? {
-                    let entry = entry?;
-                    let path = entry.path();
-                    if path.is_dir() {
-                        if entry.file_name().to_string_lossy() == "target" {
-                            continue;
-                        }
-                        walk(&path, base, out)?;
-                    } else if let Ok(content) = std::fs::read_to_string(&path) {
-                        let rel = match path.strip_prefix(base) {
-                            Ok(rel) => rel.to_string_lossy().into_owned(),
-                            Err(_) => continue,
-                        };
-                        out.push((rel, content));
-                    }
-                }
-                Ok(())
-            }
-            let mut files = Vec::new();
-            walk(root, root, &mut files)?;
-            files.sort();
-            Ok(files)
+        // 1. Materialize the working copy OFF the async thread — a slow git
+        // clone here must not starve this worker's heartbeat timer.
+        let sandbox = self.sandbox_root.join(TaskId::generate().to_string());
+        {
+            let source = workspace::resolve(spec);
+            let fixture = self.fixture_src.clone();
+            let dest = sandbox.clone();
+            tokio::task::spawn_blocking(move || {
+                workspace::prepare(source.as_ref(), &fixture, &dest)
+            })
+            .await
+            .map_err(|e| AgentError::Git(format!("prepare join error: {e}")))??;
         }
-        let context = collect_context(&self.fixture_src)?;
 
+        // 2. Read the ACTUAL code so the planner fixes reality.
+        let context = collect_context(&sandbox)?;
+
+
+        // 3. Planner → typed plan.
         let raw = self
             .provider
-            .complete(&planner_prompt(bug_description, &context))
+            .complete(&planner_prompt(&spec.bug_description, &context))
             .instrument(tracing::info_span!("planner"))
             .await?;
         let plan = FixPlan::from_llm_text(&raw)?;
 
-        // Fresh sandbox per attempt: a killed worker can never leave half a
-        // fix behind for the next generation to trip over.
-        let sandbox = self.sandbox_root.join(TaskId::generate().to_string());
-        copy_dir(&self.fixture_src, &sandbox)?;
-
+        // 4. Apply whole-file replacements.
         {
             let _guard = tracing::info_span!("apply_edits").entered();
             for edit in &plan.edits {
@@ -117,20 +96,31 @@ impl ImplementerAgent {
             }
         }
 
-        // THE ONLY source of truth for pass/fail: a real cargo test run,
-        // timed and traced as its own span under the worker.
-        let test_span = tracing::info_span!("cargo_test");
-        let _test_guard = test_span.enter();
-        let started_at = std::time::Instant::now();
-        let output = Command::new("cargo")
-            .args(["test", "--quiet"])
-            .current_dir(&sandbox)
-            .output()?;
-        tracing::info!(
-            duration_ms = started_at.elapsed().as_millis() as u64,
-            passed = output.status.success(),
-            "cargo test finished"
-        );
+        // 5. THE ONLY source of truth for pass/fail: real cargo test, timed,
+        //    and run OFF the async thread (blocking process wait must not
+        //    starve the heartbeat timer either).
+        let output = {
+            let sandbox = sandbox.clone();
+            tokio::task::spawn_blocking(move || {
+                let _span = tracing::info_span!("cargo_test").entered();
+                let started_at = std::time::Instant::now();
+
+                let out = Command::new("cargo")
+                    .args(["test", "--quiet"])
+                    .current_dir(&sandbox)
+                    .output()
+                    .map_err(AgentError::from)?;
+                tracing::info!(
+                    duration_ms = started_at.elapsed().as_millis() as u64,
+                    passed = out.status.success(),
+                    "cargo test finished"
+                );
+                Ok::<_, AgentError>(out)
+            })
+            .await
+            .map_err(|e| AgentError::Git(format!("cargo join error: {e}")))??
+        };
+
 
         let passed = output.status.success();
         let summary = summarize(&output);
@@ -148,32 +138,50 @@ impl ImplementerAgent {
     }
 }
 
-fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
-        let to = dst.join(entry.file_name());
-        if file_type.is_dir() {
-            copy_dir(&entry.path(), &to)?;
-        } else {
-            std::fs::copy(entry.path(), &to)?;
+/// Recursively list text files (relative paths) under `root` for planner
+/// context, skipping build-artifact dirs.
+fn collect_context(root: &Path) -> std::io::Result<Vec<(String, String)>> {
+    fn walk(
+        dir: &Path,
+        base: &Path,
+        out: &mut Vec<(String, String)>,
+    ) -> std::io::Result<()> {
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                let name = entry.file_name();
+                if name == "target" || name == ".git" {
+                    continue;
+                }
+                walk(&path, base, out)?;
+            } else if let Ok(content) = std::fs::read_to_string(&path) {
+                let rel = match path.strip_prefix(base) {
+                    Ok(rel) => rel.to_string_lossy().into_owned(),
+                    Err(_) => continue,
+                };
+                out.push((rel, content));
+            }
         }
+        Ok(())
     }
-    Ok(())
+    let mut files = Vec::new();
+    walk(root, root, &mut files)?;
+    files.sort();
+    Ok(files)
 }
 
 fn summarize(output: &std::process::Output) -> String {
     let combined = format!(
         "exit={:?}\nstderr:\n{}\nstdout(tail):\n{}",
         output.status.code(),
-        String::from_utf8_lossy(&output.stderr),
-        tail(String::from_utf8_lossy(&output.stdout).as_ref(), 600)
+        tail(String::from_utf8_lossy(&output.stderr).as_ref(), 600),
+        tail(String::from_utf8_lossy(&output.stdout).as_ref(), 400)
     );
     tail(&combined, 1000)
 }
 
-/// Keep the TAIL — cargo prints its failure summary last.
+/// Keep the TAIL (cargo prints its failure summary last).
 fn tail(s: &str, max_chars: usize) -> String {
     let trimmed = s.trim();
     let count = trimmed.chars().count();

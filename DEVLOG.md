@@ -115,6 +115,15 @@ Phase 5 COMPLETE — SUBMISSION READY, plus post-Done hardening: hierarchical tr
 - Auto-loads repo-root `.env` (without overriding exported vars), pre-flights provider keys (fails fast with plain-language message BEFORE compiling) and the port (busy → exact `pkill` hint), prints provider/model banner, then `exec`s `cargo run -p swarm-api` in the foreground. Flags: `--mock` (force offline), `--release`.
 - Verified all paths live: help text; groq-without-any-key exits 1 with "GROQ_API_KEY is not set"; `--mock` serves `{"tasks":[]}` on :3000; second concurrent launch exits 1 with port-busy hint.
 
+### 2026-08-25 — Side-project demo target + PR-link input layer
+- New sibling repo **`swarm-demo-target`** (pushed to `github.com/Ay-obami/swarm-demo-target`, public): multi-module `warehouse` crate (currency bps math, pricing, discount stacking, batch reservation, report helpers). Green `main`; THREE seeded bug branches (`pr/101-discount-stack`, `pr/102-fx-rounding`, `pr/103-oversell-boundary`) each carrying its red acceptance tests; published both as branches AND as GitHub PRs (#1 fx, #2 oversell, #3 discount-cap — repo-global numbering!). `scripts/setup_prs.sh [remote]` re-seeds deterministically from patch files; `scripts/open_prs.sh` opens the real PRs via gh.
+- Swarm CI input layer: `TaskSpec` gained optional `pr_url` / `repo_url` / `git_ref`. New `agents::workspace` resolves priority repo_url > pr_url > fixture; GitHub PR links map to cloning `refs/pull/N/head` (quote-aware `parse_github_pr` unit-tested); git checkout is shallow fetch + FORCE checkout of FETCH_HEAD. `ImplementerAgent::fix` now takes the whole `TaskSpec`, prepares the sandbox FIRST, then reads context from the clone itself.
+- TWO real failure modes found & fixed during live runs:
+  1. Blocking `git clone`/`cargo test` starved the worker's own heartbeat timer → supervisor correctly reaped healthy workers mid-clone (3× loop). Fix: heavy FS/subprocess work moved to `tokio::task::spawn_blocking` so heartbeats keep flowing. Great accidental proof the lease mechanism catches slow (not just dead) workers.
+  2. Groq 429 TPM + model prose around JSON broke naive plan extraction. Fix: quote-aware balanced-brace extractor tries direct parse → fenced blocks → every complete `{…}` object until one validates.
+- FINAL LIVE RESULT: pasted `…/pull/1` → **status merged, attempt 1, WALL 12.3 s**, `TestsPassed { origin: RealCargoTest }`. Workspace suite green throughout (`/tmp/swarm_git_t3.log`). GitHub-side gotcha logged: force-pushing a PR branch auto-updates its head (used to sync reseeded branches); refs/pull/* themselves are read-only on GitHub.
+
+
 
 
 

@@ -232,6 +232,9 @@ fn spec() -> TaskSpec {
         pr_id: "PR-42".into(),
         title: "Fix off-by-one in ledger sum".into(),
         bug_description: "ledger sum skips the final element".into(),
+        pr_url: None,
+        repo_url: None,
+        git_ref: None,
     }
 }
 

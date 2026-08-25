@@ -18,7 +18,19 @@ pub struct TaskSpec {
     pub title: String,
     /// Diff summary / bug description the planner will read.
     pub bug_description: String,
+    /// Optional GitHub PR link (`…/pull/<n>`) — resolves to cloning
+    /// `refs/pull/<n>/head` from that repository.
+    #[serde(default)]
+    pub pr_url: Option<String>,
+    /// Optional direct git URL (https/ssh/file). Overrides `pr_url`.
+    #[serde(default)]
+    pub repo_url: Option<String>,
+    /// Optional explicit ref to check out (branch, tag, or full ref like
+    /// `refs/pull/N/head`). Defaults to the remote HEAD.
+    #[serde(default)]
+    pub git_ref: Option<String>,
 }
+
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -117,6 +129,9 @@ mod tests {
             pr_id: "PR-1".into(),
             title: "t".into(),
             bug_description: "d".into(),
+            pr_url: None,
+            repo_url: None,
+            git_ref: None,
         }
     }
 

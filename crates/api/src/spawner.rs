@@ -46,17 +46,18 @@ impl TaskExecutor for SimulatedImplementer {
 }
 
 /// Bridges swarm_worker's `TaskExecutor` port to the Phase 3 implementer
-/// agent. Agent errors become loud crashes (supervisor treats them like any
-/// worker death — lease/Died handling, reassignment).
+/// agent. Carries the FULL task spec so git-backed PRs (`pr_url` /
+/// `repo_url` + `git_ref`) can be cloned into the sandbox. Agent errors
+/// become loud crashes (supervisor treats them like any worker death).
 pub struct AgentExecutor {
     pub agent: Arc<swarm_agents::ImplementerAgent>,
-    pub bug_description: String,
+    pub spec: swarm_core::task::TaskSpec,
 }
 
 #[async_trait]
 impl TaskExecutor for AgentExecutor {
     async fn execute(&mut self) -> ExecutorOutcome {
-        match self.agent.fix(&self.bug_description).await {
+        match self.agent.fix(&self.spec).await {
             Ok(report) => ExecutorOutcome::Completed(report),
             Err(e) => ExecutorOutcome::Crashed(format!("implementer agent failed: {e}")),
         }

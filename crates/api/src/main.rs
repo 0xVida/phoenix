@@ -83,9 +83,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(move |assignment: &Assignment| {
             Box::new(AgentExecutor {
                 agent: agent.clone(),
-                bug_description: assignment.spec.bug_description.clone(),
+                spec: assignment.spec.clone(),
             }) as Box<dyn swarm_worker::TaskExecutor>
         })
+
     } else {
         let work_for = Duration::from_millis(env_u64("SWARM_SIM_WORK_MS", 3000));
         Arc::new(move |_assignment: &Assignment| {
