@@ -40,6 +40,12 @@ export default function Console() {
   const apiLiveRef = useRef<boolean | null>(null);
   apiLiveRef.current = apiLive;
   const backendTaskId = useRef<string | null>(null);
+  // `assign()` runs synchronously inside the backend's submit_pr, so
+  // worker.started can hit the SSE stream before the POST /tasks response
+  // (carrying the real task_id) resolves. We identify "our" task from the
+  // task.created event itself instead — it's always emitted first — rather
+  // than trusting the REST round-trip to win the race.
+  const pendingSubmission = useRef<{ pr_id: string; title: string } | null>(null);
 
   const evId = useRef(0);
   const phase = useRef<Phase>("idle");
@@ -50,10 +56,13 @@ export default function Console() {
   const seq = useRef(0);
 
   const log = useCallback((name: string, detail: string, level: PhoenixEvent["level"] = "info") => {
-    evId.current += 1;
-    setEvents((prev) =>
-      [...prev, { id: evId.current, ts: nowStamp(), name, detail, level }].slice(-120),
-    );
+    // Snapshot the id NOW, at call time — not inside the updater below, which
+    // React may run later. Two log() calls in the same tick (very common:
+    // spawnWorker fires two in a row) would otherwise both bump evId.current
+    // before either updater runs, so both would read the same final value and
+    // mint duplicate React keys for the event log.
+    const id = ++evId.current;
+    setEvents((prev) => [...prev, { id, ts: nowStamp(), name, detail, level }].slice(-120));
   }, []);
 
   const spawnWorker = useCallback(
@@ -139,6 +148,7 @@ export default function Console() {
     seq.current = 0;
     phase.current = "planning";
     backendTaskId.current = null;
+    pendingSubmission.current = { pr_id: spec.pr_id, title: spec.title };
     log("task.created", `pr_id=${spec.pr_id} (submitting to swarm-api…)`);
     if (prLink.trim()) log("pr.linked", `url=${prLink.trim()}`, "muted");
     setTask({
@@ -159,10 +169,18 @@ export default function Console() {
     });
     try {
       const res = await submitTaskApi(spec);
-      backendTaskId.current = res.task_id;
-      log("task.dispatched", `backend task_id=${res.task_id}`, "muted");
-      setTask((t) => (t ? { ...t, task_id: res.task_id } : t));
+      // Normal path: the SSE task.created handler below already claimed
+      // backendTaskId (it arrives before or right around this response).
+      // Fallback only: if the stream lagged/reconnected and missed it,
+      // adopt the REST response's id so the console doesn't stall forever.
+      if (!backendTaskId.current) {
+        backendTaskId.current = res.task_id;
+        pendingSubmission.current = null;
+        log("task.dispatched", `backend task_id=${res.task_id} (via REST fallback)`, "muted");
+        setTask((t) => (t ? { ...t, task_id: res.task_id } : t));
+      }
     } catch (e) {
+      pendingSubmission.current = null;
       log("task.error", e instanceof Error ? e.message : String(e), "accent");
     }
   }, [prId, prLink, bug, log]);
@@ -271,15 +289,32 @@ export default function Console() {
   );
 
   // Real event stream → real state. Opened once the backend is confirmed
-  // live; filtered to the currently-submitted task_id.
+  // live; filtered to the currently-submitted task_id. task.created is the
+  // ONE event exempt from that filter — it's how we learn the task_id in
+  // the first place (see pendingSubmission above).
   useEffect(() => {
     if (apiLive !== true) return;
     const es = openEventStream((name: BackendEventName, data: BackendEventData) => {
+      if (name === "task.created") {
+        const pending = pendingSubmission.current;
+        if (
+          !backendTaskId.current &&
+          pending &&
+          data.pr_id === pending.pr_id &&
+          data.title === pending.title
+        ) {
+          backendTaskId.current = data.task_id;
+          pendingSubmission.current = null;
+          log("task.dispatched", `backend task_id=${data.task_id}`, "muted");
+          setTask((t) => (t ? { ...t, task_id: data.task_id } : t));
+        }
+        return;
+      }
       if (!backendTaskId.current || data.task_id !== backendTaskId.current) return;
       applyBackendEvent(name, data);
     });
     return () => es.close();
-  }, [apiLive, applyBackendEvent]);
+  }, [apiLive, applyBackendEvent, log]);
 
   const submit = apiLive ? submitLive : submitSim;
   const kill = apiLive ? killLive : killSim;

@@ -29,8 +29,13 @@ export type TaskSnapshot = {
   merged: boolean;
 };
 
+// Priority: an explicit localStorage override (manual dev/testing escape
+// hatch) → VITE_API_BASE (derived by vite.config.ts from the repo-root
+// .env's SWARM_BIND — the exact same value scripts/swarm.sh binds the
+// backend to) → the hardcoded fallback, matching swarm.sh's own default.
 export const API_BASE =
   (typeof window !== "undefined" && window.localStorage.getItem("phoenix_api_base")) ||
+  import.meta.env.VITE_API_BASE ||
   "http://localhost:3000";
 
 export const LEASE_TTL_MS = 1500;
