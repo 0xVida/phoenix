@@ -12,6 +12,7 @@ use axum::{Json, Router};
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::{Stream, StreamExt};
+use tower_http::cors::{Any, CorsLayer};
 
 use swarm_core::events::SwarmEvent;
 use swarm_core::ids::TaskId;
@@ -80,6 +81,15 @@ pub fn router(state: AppState) -> Router {
 
         .route("/tasks/:id/kill", post(kill_task))
         .route("/events", get(events))
+        .layer(
+            // Demo/dev CORS: the dashboard may be served from a different
+            // origin (Vite dev server) than the API. Permissive is fine for
+            // a hackathon project with no auth/cookies in play.
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any),
+        )
         .with_state(state)
 }
 

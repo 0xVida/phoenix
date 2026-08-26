@@ -1,10 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  API_BASE,
   HEARTBEAT_MS,
   LEASE_TTL_MS,
   nowStamp,
   newTaskId,
   workerId,
+  probeApi,
+  submitTaskApi,
+  killTaskApi,
+  openEventStream,
+  type BackendEventData,
+  type BackendEventName,
   type PhoenixEvent,
   type TaskSnapshot,
 } from "@/lib/phoenix";
@@ -25,9 +32,14 @@ export default function Console() {
   const [prLink, setPrLink] = useState("");
   const [bug, setBug] = useState("");
   const [uptime, setUptime] = useState(0);
+  // null = probing; true = real swarm-api reachable; false = local simulation
+  const [apiLive, setApiLive] = useState<boolean | null>(null);
 
   const taskRef = useRef<TaskSnapshot | null>(null);
   taskRef.current = task;
+  const apiLiveRef = useRef<boolean | null>(null);
+  apiLiveRef.current = apiLive;
+  const backendTaskId = useRef<string | null>(null);
 
   const evId = useRef(0);
   const phase = useRef<Phase>("idle");
@@ -61,7 +73,7 @@ export default function Console() {
     [log],
   );
 
-  const submit = useCallback(() => {
+  const submitSim = useCallback(() => {
     const id = newTaskId();
     const t: TaskSnapshot = {
       task_id: id,
@@ -91,19 +103,205 @@ export default function Console() {
     log("planner.dispatch", "model=gpt-oss-120b reading diff…", "muted");
   }, [bug, prId, prLink, log]);
 
-  const kill = useCallback(() => {
+  const killSim = useCallback(() => {
     if (!task || !alive.current) return;
     alive.current = false;
     log("worker.killed", `id=${task.worker_id} signal=SIGKILL (fault injection)`, "accent");
     log("heartbeat.lost", "supervisor watching lease…", "accent");
   }, [task, log]);
 
-  // Deterministic clock
+  // ---- Live backend wiring ------------------------------------------
+  // Probe once on mount: if swarm-api answers, drive the console off its
+  // real SSE stream; otherwise fall back to the local simulation above so
+  // the dashboard stays demoable offline.
+  useEffect(() => {
+    let cancelled = false;
+    probeApi(API_BASE).then((ok) => {
+      if (!cancelled) setApiLive(ok);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const submitLive = useCallback(async () => {
+    const spec = {
+      pr_id: prId.trim() || "PR-102",
+      title: (bug.trim() || "FX conversion loses cents").slice(0, 60),
+      bug_description: bug.trim() || "convert() must apply rate_bps once and preserve cents.",
+      ...(prLink.trim() ? { pr_url: prLink.trim() } : {}),
+    };
+    setEvents([]);
+    evId.current = 0;
+    setPulses(Array(28).fill(0));
+    alive.current = false;
+    lease.current = LEASE_TTL_MS;
+    seq.current = 0;
+    phase.current = "planning";
+    backendTaskId.current = null;
+    log("task.created", `pr_id=${spec.pr_id} (submitting to swarm-api…)`);
+    if (prLink.trim()) log("pr.linked", `url=${prLink.trim()}`, "muted");
+    setTask({
+      task_id: "…",
+      pr_id: spec.pr_id,
+      title: spec.title,
+      bug_description: spec.bug_description,
+      status: "planning",
+      attempt: 0,
+      max_attempts: MAX_ATTEMPTS,
+      worker_id: null,
+      sandbox: null,
+      lease_remaining_ms: LEASE_TTL_MS,
+      lease_ttl_ms: LEASE_TTL_MS,
+      heartbeat_seq: 0,
+      provenance: null,
+      merged: false,
+    });
+    try {
+      const res = await submitTaskApi(spec);
+      backendTaskId.current = res.task_id;
+      log("task.dispatched", `backend task_id=${res.task_id}`, "muted");
+      setTask((t) => (t ? { ...t, task_id: res.task_id } : t));
+    } catch (e) {
+      log("task.error", e instanceof Error ? e.message : String(e), "accent");
+    }
+  }, [prId, prLink, bug, log]);
+
+  const killLive = useCallback(async () => {
+    if (!backendTaskId.current) return;
+    log("worker.kill_requested", `task=${backendTaskId.current}`, "accent");
+    try {
+      const res = await killTaskApi(backendTaskId.current);
+      if (!res.killed) {
+        log("worker.kill_noop", res.note ?? "no live worker generation found", "muted");
+      }
+    } catch (e) {
+      log("worker.kill_error", e instanceof Error ? e.message : String(e), "accent");
+    }
+  }, [log]);
+
+  const applyBackendEvent = useCallback(
+    (name: BackendEventName, data: BackendEventData) => {
+      switch (name) {
+        case "worker.started":
+          alive.current = true;
+          lease.current = LEASE_TTL_MS;
+          phase.current = "implementing";
+          log("worker.started", `id=${data.worker_id} attempt=${data.attempt}`, "accent");
+          setTask((t) =>
+            t
+              ? {
+                  ...t,
+                  status: "implementing",
+                  worker_id: data.worker_id ?? t.worker_id,
+                  attempt: data.attempt ?? t.attempt,
+                  sandbox: `server-managed sandbox (attempt ${data.attempt})`,
+                }
+              : t,
+          );
+          break;
+        case "worker.heartbeat":
+          alive.current = true;
+          lease.current = LEASE_TTL_MS;
+          seq.current += 1;
+          log("worker.heartbeat", `origin=${data.worker_id} seq=${seq.current}`, "muted");
+          setPulses((p) => [...p.slice(1), 0.55 + Math.random() * 0.45]);
+          setTask((t) => (t ? { ...t, heartbeat_seq: seq.current } : t));
+          break;
+        case "worker.failed":
+          alive.current = false;
+          log("worker.failed", `attempt=${data.attempt} reason=${data.reason}`, "accent");
+          break;
+        case "task.reassigned":
+          log("task.reassigned", `attempt=${data.attempt} reason=lease_expired fence=ok`);
+          setTask((t) => (t ? { ...t, attempt: data.attempt ?? t.attempt } : t));
+          break;
+        case "stale_result.rejected":
+          log(
+            "stale_result.rejected",
+            `attempt=${data.attempt} worker=${data.worker_id} — old agent result rejected, task already reassigned`,
+            "muted",
+          );
+          break;
+        case "tests.passed":
+          log("tests.passed", `origin=${data.origin}`);
+          setTask((t) => (t ? { ...t, status: "testing", provenance: data.origin ?? null } : t));
+          break;
+        case "tests.failed":
+          log("tests.failed", data.reason ?? "", "accent");
+          break;
+        case "merge.opened":
+          phase.current = "merged";
+          alive.current = false;
+          log("merge.opened", "merge gate OPEN — real cargo test proof", "accent");
+          setTask((t) => {
+            if (!t) return t;
+            setVerdicts((v) =>
+              [{ pr_id: t.pr_id, merged: true, attempt: t.attempt }, ...v].slice(0, 4),
+            );
+            return { ...t, status: "merged", merged: true };
+          });
+          break;
+        case "merge.gated":
+          phase.current = "failed";
+          alive.current = false;
+          log("merge.gated", data.reason ?? "", "accent");
+          setTask((t) => {
+            if (!t) return t;
+            setVerdicts((v) =>
+              [{ pr_id: t.pr_id, merged: false, attempt: t.attempt }, ...v].slice(0, 4),
+            );
+            return { ...t, status: "failed" };
+          });
+          break;
+        case "github.push_ok":
+          log("github.push_ok", `branch=${data.branch}`, "muted");
+          break;
+        case "github.pr_merged":
+          log("github.pr_merged", data.url ?? "", "accent");
+          break;
+        case "github.action_failed":
+          log("github.action_failed", data.reason ?? "", "muted");
+          break;
+        case "task.created":
+          break; // already logged locally at submit time
+      }
+    },
+    [log],
+  );
+
+  // Real event stream → real state. Opened once the backend is confirmed
+  // live; filtered to the currently-submitted task_id.
+  useEffect(() => {
+    if (apiLive !== true) return;
+    const es = openEventStream((name: BackendEventName, data: BackendEventData) => {
+      if (!backendTaskId.current || data.task_id !== backendTaskId.current) return;
+      applyBackendEvent(name, data);
+    });
+    return () => es.close();
+  }, [apiLive, applyBackendEvent]);
+
+  const submit = apiLive ? submitLive : submitSim;
+  const kill = apiLive ? killLive : killSim;
+
+  // Deterministic clock — drives the FULL fake timeline in simulated mode.
+  // In live mode it only decays the visual lease bar while no heartbeat is
+  // arriving; every real state transition instead comes from applyBackendEvent
+  // above, driven by the actual SSE stream.
   useEffect(() => {
     const iv = setInterval(() => {
       setUptime((u) => u + TICK);
       const prev = taskRef.current;
       if (!prev) return;
+
+      if (apiLiveRef.current) {
+        if (!alive.current) {
+          lease.current = Math.max(0, lease.current - TICK);
+          setTask((t) => (t ? { ...t, lease_remaining_ms: lease.current } : t));
+        }
+        return;
+      }
+
       let t: TaskSnapshot = { ...prev };
       phaseLeft.current -= TICK;
 
@@ -200,7 +398,27 @@ export default function Console() {
           </div>
           <div className="h-4 w-px bg-border" />
           <div className="font-mono text-[10px] uppercase tracking-tighter text-muted">
-            Host: <span className="text-foreground">swarm-prod-04</span>
+            Host:{" "}
+            <span className="text-foreground">
+              {apiLive ? API_BASE.replace(/^https?:\/\//, "") : "swarm-prod-04"}
+            </span>
+          </div>
+          <div className="h-4 w-px bg-border" />
+          <div
+            className={`font-mono text-[10px] font-bold uppercase tracking-widest ${
+              apiLive === null ? "text-muted" : apiLive ? "text-accent" : "text-muted"
+            }`}
+            title={
+              apiLive
+                ? "swarm-api reachable — driving off the real SSE event stream"
+                : "swarm-api unreachable — running a local faithful simulation"
+            }
+          >
+            {apiLive === null
+              ? "Backend: probing…"
+              : apiLive
+                ? "Backend: LIVE"
+                : "Backend: SIMULATED"}
           </div>
         </div>
         <div className="flex gap-4 font-mono text-[10px] text-muted">
